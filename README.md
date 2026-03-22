@@ -44,14 +44,20 @@ This project requires the XYDiff binary to be compiled locally! Please generate 
 ## Running the viewer
 
 place testsets into viewer/testset and run:
-
-node main.js --algo=xydiff  
+```
+node main.js --algo=xydiff 
+``` 
 or  
-node main.js --algo=cpeediff --anchor=endpoint   
+```
+node main.js --algo=cpeediff --anchor=endpoint  
+``` 
 or  
-node main.js --algo=cpeediff --anchor=id   
+```
+node main.js --algo=cpeediff --anchor=id  
+``` 
 or  
+```
 node main.js --algo=cpeediff --anchor=label  
-  
+  ```
 then open the index.html  
 
