@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>CPEE Diff - Unified</title>
+
+    <script src="https://cpee.org/js_libs/jquery.min.js"></script>
+    <script src="https://cpee.org/js_libs/jquery.svg.min.js"></script>
+    <script src="https://cpee.org/js_libs/jquery.svgdom.min.js"></script>
+    <script src="https://cpee.org/js_libs/util.js"></script>
+
+    <script>
+        window.CPEE = { log(){}, trigger(){}, processes:{}, editor:{}, adapter:{}, states:{},
+            util:{ uuid:()=>'id-'+Math.random().toString(36).slice(2,9),
+                isArray:Array.isArray, isFunction:v=>typeof v==='function' } };
+    </script>
+
+    <script src="../../cpee-layout/wfadaptor.js"></script>
+    <link rel="stylesheet" href="../../cpee-layout/wfadaptor.css" />
+
+    <script>
+        window.save = window.save || function () { };
+    </script>
+    <script src="../../cpee-layout/themes/base.js"></script>
+
+    <style>
+        :root { --gap: 12px; --panel-bg: #fff; }
+        html, body { height: 100%; margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+        header { padding: 8px 12px; border-bottom: 1px solid #eee; display: flex; gap: 12px; align-items: center; }
+        .legend span { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; color:#444; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+        .layout-grid {
+            height: calc(100% - 44px);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--gap);
+            padding: var(--gap);
+            box-sizing: border-box;
+            background: #f8f9fb;
+        }
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid #eee;
+            border-radius: 8px;
+            overflow: hidden;
+            display: grid;
+            grid-template-rows: auto 1fr;
+            min-width: 0;
+        }
+        .panel > .title { padding: 8px 10px; border-bottom: 1px solid #eee; background:#fafafa; font-weight: 600; }
+        .canvas { overflow: auto; position: relative; }
+        .canvas svg { width: 100%; display: block; }
+
+        [data-hitbox] { stroke-width: 2 !important; }
+    </style>
+</head>
+<body data-theme-base="../../cpee-layout/themes/">
+<header>
+    <strong>CpeeDiff / XyDiff Viewer</strong>
+    <div class="legend">
+        <span><i class="dot" style="background:#22c55e"></i> insert into new model</span>
+        <span><i class="dot" style="background:#ef4444"></i> delete from old model</span>
+        <span><i class="dot" style="background:#3b82f6"></i> move</span>
+        <span><i class="dot" style="background:#a855f7"></i> update</span>
+        <span><i class="dot" style="background:#ec4899"></i> move + update</span>
+    </div>
+</header>
+
+<div class="layout-grid" style="grid-template-columns: 1fr;">
+    <div class="panel">
+        <div class="title">unified model (NEW + ghosts)</div>
+        <div id="layout-new" class="canvas">
+            <svg id="graph-new" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+    </div>
+</div>
+
+
+<script src="./diff_data.js"></script>
+<script type="module" src="./unified/index.js"></script>
+
+</body>
+</html>
