@@ -2,7 +2,7 @@
 
 This repository contains:
 - the visualization frontend
-- integration logic for CpeeDiff and XYDiff results
+- integration logic for CpeeDiff and XYDiff
 - scripts for generating diff output and viewer input data
 
 This repository does not include the following external dependencies:
