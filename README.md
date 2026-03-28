@@ -33,7 +33,7 @@ Repository: https://github.com/etm/cpee-layout
 Commit: `796037c3efcf0e1e970a2032d2787019d283aef3`
 
 ### cpeediff
-Repository: https://github.com/jennvheb/ma_diff_visualization.git  
+Repository: https://github.com/jennvheb/cpeediff
 
 ### xydiff
 Repository: https://github.com/fdintino/xydiff  
