@@ -43,7 +43,7 @@ This project requires the XYDiff binary to be compiled locally! Please generate 
 
 ## Running the viewer
 
-place testsets into viewer/testset and run:
+place testsets into viewer/testset, set them as OLD/NEW in main.js and run in the viewer directory:
 ```
 node main.js --algo=xydiff 
 ``` 
