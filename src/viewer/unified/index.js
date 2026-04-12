@@ -3,34 +3,107 @@ import {getDescRoot, renderUnifiedXml} from "./render.js";
 import {normalizeOp, attachUpdateContent, mergeMoveAndUpdateOps} from "./normalizeOps.js";
 import {collectDrawableIdsXML} from "./xml.js";
 import {isStrictAncestorPath} from "./paths.js";
-import {toSegs} from "./config.js"
+import {toSegs} from "./config.js";
 import {insertGhost} from "./placement.js";
 import {buildIdIndex, colorizeUnified} from "./colorize.js";
-import {buildOpsByIdDirect, buildOpsByIdRegion, installUnifiedClickHandler} from "./clicks.js";
+import {buildOpsByIdDirect, buildOpsByIdRegion, buildOpsByKey, installUnifiedClickHandler} from "./clicks.js";
+import {installUndoController} from "./undoController.js";
+import {installMockHostUndo} from "./mockHostUndo.js";
 
-const source = (window.DIFF_SOURCE || "").toLowerCase();
-const isXy = source === "xydiff";
+function logSampleOps(metaOps) {
+    const insertOp = metaOps.find(op => op.type === "insert");
+    const deleteOp = metaOps.find(op => op.type === "delete");
+    const updateOp = metaOps.find(op => op.type === "update");
 
-(function () {
-    const { OLD_TREE, NEW_TREE, DIFF } = window;
-    if (!OLD_TREE || !NEW_TREE) {
-        return;
+    console.log("sample insert op", insertOp);
+    console.log("sample delete op", deleteOp);
+    console.log("sample update op", updateOp);
+
+    if (insertOp) console.log("sample insert op json", JSON.stringify(insertOp, null, 2));
+    if (deleteOp) console.log("sample delete op json", JSON.stringify(deleteOp, null, 2));
+    if (updateOp) console.log("sample update op json", JSON.stringify(updateOp, null, 2));
+}
+
+function clearUnifiedCanvas() {
+    const graph = document.getElementById("graph-new");
+    if (graph) {
+        graph.innerHTML = "";
+        delete graph.__unifiedClickInstalled;
     }
 
-    const oldRoot = getDescRoot(OLD_TREE);
-    const newRoot = getDescRoot(NEW_TREE);
-
-    if (!oldRoot || !newRoot) {
-        console.error("Missing <description> root in OLD/NEW");
-        return;
+    const layout = document.getElementById("layout-new");
+    if (layout) {
+        delete layout.__unifiedClickInstalled;
     }
 
-    stampLogicalIds(oldRoot);
-    stampLogicalIds(newRoot);
+    delete window.colorUnifiedSvg;
+}
+function isMoveLike(op) {
+    return op?.type === "move" || op?.type === "moveupdate";
+}
 
-    function indexNewGateways(newRoot) {
+function stableOpId(op) {
+    return op?.sidOld || op?.sidNew || op?.selfOldId || null;
+}
+
+function isStrictDescendantPath(child, parent) {
+    return !!child && !!parent && child !== parent && child.startsWith(parent + "/");
+}
+
+function parentCoversChildMove(parentOp, childOp) {
+    if (!isMoveLike(parentOp) || !isMoveLike(childOp)) return false;
+    if (parentOp === childOp) return false;
+
+    const parentId = stableOpId(parentOp);
+    const childId = stableOpId(childOp);
+
+    // never compare the same op against itself logically
+    if (parentId && childId && parentId === childId) return false;
+
+    // strongest signal: subtree ids
+    if (childId) {
+        if ((parentOp.subtreeIdsOld || []).includes(childId)) return true;
+        if ((parentOp.subtreeIdsNew || []).includes(childId)) return true;
+    }
+
+    // fallback: path containment
+    const parentOld = parentOp.rebasedOldPath || parentOp.oldPath || null;
+    const childOld = childOp.rebasedOldPath || childOp.oldPath || null;
+    if (isStrictDescendantPath(childOld, parentOld)) return true;
+
+    const parentNew = parentOp.rebasedNewPath || parentOp.newPath || null;
+    const childNew = childOp.rebasedNewPath || childOp.newPath || null;
+    if (isStrictDescendantPath(childNew, parentNew)) return true;
+
+    return false;
+}
+
+function suppressNestedMoveOps(metaOps) {
+    return metaOps.filter((op, i) => {
+        if (!isMoveLike(op)) return true;
+
+        const covered = metaOps.some((other, j) => {
+            if (i === j) return false;
+            return parentCoversChildMove(other, op);
+        });
+
+        if (covered) {
+            console.log("move suppress: dropping nested move", {
+                sidOld: op.sidOld || null,
+                sidNew: op.sidNew || null,
+                oldPath: op.rebasedOldPath || op.oldPath || null,
+                newPath: op.rebasedNewPath || op.newPath || null,
+            });
+            return false;
+        }
+
+        return true;
+    });
+}
+function buildMetaOps({ oldRoot, newRoot, diffOps, isXy }) {
+    function indexNewGateways(root) {
         const arr = [];
-        newRoot.querySelectorAll("loop, choose, parallel, otherwise, alternative, parallel_branch, stop")
+        root.querySelectorAll("loop, choose, parallel, otherwise, alternative, parallel_branch, stop")
             .forEach(gw => {
                 const id = gw.getAttribute("id") || null;
                 const parent = nearestDrawable(gw.parentNode);
@@ -51,10 +124,8 @@ const isXy = source === "xydiff";
         newGatewayIndex,
     };
 
-    const rawOps = Array.isArray(DIFF) ? DIFF : [];
-
-    let metaOps = rawOps.map((op, idx) => {
-        const base = normalizeOp(op, idx, rawOps, baseCtx);
+    let metaOps = diffOps.map((op, idx) => {
+        const base = normalizeOp(op, idx, diffOps, baseCtx);
 
         const subtreeIdsOld = base.ownerOld ? collectDrawableIdsXML(base.ownerOld) : [];
         const subtreeIdsNew = base.ownerNew ? collectDrawableIdsXML(base.ownerNew) : [];
@@ -77,6 +148,13 @@ const isXy = source === "xydiff";
     });
 
     metaOps = mergeMoveAndUpdateOps(metaOps);
+    metaOps = suppressNestedMoveOps(metaOps);
+    const chooseOps = metaOps.filter(op =>
+        (op.type === "update" || op.type === "moveupdate") &&
+        String(op.sidOld || op.sidNew || "").includes("__gw_choose__")
+    );
+
+    console.log("choose ops after mergeMoveAndUpdateOps", JSON.stringify(chooseOps, null, 2));
 
     const insertedNewIds = new Set();
     for (const op of metaOps) {
@@ -99,6 +177,14 @@ const isXy = source === "xydiff";
         }
         return true;
     });
+    console.log("choose ops after delete-filter", JSON.stringify(
+        metaOps.filter(op =>
+            (op.type === "update" || op.type === "moveupdate") &&
+            String(op.sidOld || op.sidNew || "").includes("__gw_choose__")
+        ),
+        null,
+        2
+    ));
 
     metaOps = metaOps.map((op) => {
         if (!(op.type === "move" || op.type === "moveupdate")) return op;
@@ -133,6 +219,15 @@ const isXy = source === "xydiff";
         for (const id of op.subtreeIdsOld || []) deletedOldIds.add(id);
     }
 
+    return {
+        metaOps,
+        baseCtx,
+        movedOldIds,
+        deletedOldIds
+    };
+}
+
+function buildUnifiedRoot({ newRoot, metaOps, baseCtx, movedOldIds, deletedOldIds, isXy }) {
     const placementCtx = {
         ...baseCtx,
         movedOldIds,
@@ -215,8 +310,74 @@ const isXy = source === "xydiff";
         }
     }
 
+    return unifiedRoot;
+}
+
+export function renderUnifiedApp({
+                                     oldTreeXml,
+                                     newTreeXml,
+                                     diffOps,
+                                     diffSource
+                                 }) {
+    const source = (diffSource || "").toLowerCase();
+    const isXy = source === "xydiff";
+
+    if (!oldTreeXml || !newTreeXml) {
+        console.error("Missing OLD_TREE / NEW_TREE XML");
+        return;
+    }
+
+    clearUnifiedCanvas();
+
+    const oldRoot = getDescRoot(oldTreeXml);
+    const newRoot = getDescRoot(newTreeXml);
+
+    if (!oldRoot || !newRoot) {
+        console.error("Missing <description> root in OLD/NEW");
+        return;
+    }
+
+    stampLogicalIds(oldRoot);
+    stampLogicalIds(newRoot);
+
+    const rawOps = Array.isArray(diffOps) ? diffOps : [];
+
+    const {
+        metaOps,
+        baseCtx,
+        movedOldIds,
+        deletedOldIds
+    } = buildMetaOps({
+        oldRoot,
+        newRoot,
+        diffOps: rawOps,
+        isXy
+    });
+
+    logSampleOps(metaOps);
+    window.__META_OPS__ = metaOps;
+
+    const unifiedRoot = buildUnifiedRoot({
+        newRoot,
+        metaOps,
+        baseCtx,
+        movedOldIds,
+        deletedOldIds,
+        isXy
+    });
+
     const opsByIdDirect = buildOpsByIdDirect(metaOps);
     const opsByIdRegion = buildOpsByIdRegion(metaOps);
+    const opsByKey = buildOpsByKey(metaOps);
+
+    console.log("final choose ops before render", JSON.stringify(
+        metaOps.filter(op =>
+            (op.type === "update" || op.type === "moveupdate") &&
+            String(op.sidOld || op.sidNew || "").includes("__gw_choose__")
+        ),
+        null,
+        2
+    ));
 
     renderUnifiedXml(unifiedRoot);
 
@@ -226,7 +387,7 @@ const isXy = source === "xydiff";
             document.querySelector("#graph-new svg");
 
         if (!svgRoot) {
-            console.warn("UNIFIED svgRoot not found (#graph-new)");
+            console.warn("unified svgRoot not found (#graph-new)");
             return;
         }
 
@@ -237,6 +398,31 @@ const isXy = source === "xydiff";
             unifiedRoot,
             opsByIdDirect,
             opsByIdRegion,
+            opsByKey
         });
     };
-})();
+}
+
+installUndoController();
+
+installMockHostUndo({
+    rerender: async ({ oldXml, newXml, diffOps, diffSource }) => {
+        console.log("rerender old stays fixed, new replaced");
+        console.log(oldXml);
+        console.log(newXml);
+
+        renderUnifiedApp({
+            oldTreeXml: oldXml,
+            newTreeXml: newXml,
+            diffOps: diffOps || [],
+            diffSource: diffSource || window.DIFF_SOURCE || ""
+        });
+    }
+});
+
+renderUnifiedApp({
+    oldTreeXml: window.OLD_TREE,
+    newTreeXml: window.NEW_TREE,
+    diffOps: window.DIFF || [],
+    diffSource: window.DIFF_SOURCE || ""
+});

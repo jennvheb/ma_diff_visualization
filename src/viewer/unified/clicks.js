@@ -1,6 +1,26 @@
 import {isGatewayTagName, tagName} from "../../integration/stableIds.js";
 import {idVariants, normalizeElementId} from "./ids.js";
 
+export function opKey(op) {
+    return [
+        op.type || "",
+        op.sidOld || "",
+        op.sidNew || "",
+        op.rebasedOldPath || "",
+        op.rebasedNewPath || "",
+        op.oldPath || "",
+        op.newPath || ""
+    ].join("|");
+}
+
+export function buildOpsByKey(metaOps) {
+    const m = new Map();
+    for (const op of metaOps || []) {
+        m.set(opKey(op), op);
+    }
+    return m;
+}
+
 export function buildOpsByIdDirect(metaOps) {
     const m = new Map();
     function add(id, op) {
@@ -41,13 +61,7 @@ function dedupeOps(ops) {
     const seen = new Set();
     const out = [];
     for (const op of ops || []) {
-        const key = [
-            op.type,
-            op.sidOld || "",
-            op.sidNew || "",
-            op.rebasedOldPath || "",
-            op.rebasedNewPath || "",
-        ].join("|");
+        const key = opKey(op);
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(op);
@@ -71,6 +85,7 @@ function buildClickPayload(clickedId, opsForId) {
     return {
         clickedId,
         updates: interesting.map((op) => ({
+            opKey: opKey(op),
             type: op.type,
             rebasedOldPath: op.rebasedOldPath || null,
             rebasedNewPath: op.rebasedNewPath || null,
@@ -80,68 +95,126 @@ function buildClickPayload(clickedId, opsForId) {
             newPath: op.newPath || null,
             contentOld: op.contentOld || null,
             contentNew: op.contentNew || null,
+            subtreeIdsOld: op.subtreeIdsOld || [],
+            subtreeIdsNew: op.subtreeIdsNew || [],
+            selfOldId: op.selfOldId || null,
+            mergeOwnerId: op.mergeOwnerId || null,
         })),
     };
 }
-
-export function installUnifiedClickHandler({ unifiedRoot, opsByIdDirect, opsByIdRegion }) {
+function unwrapGhostId(id) {
+    if (!id || typeof id !== "string") return id;
+    return id
+        .replace(/^ele-/, "")
+        .replace(/^__ghost_delete__/, "")
+        .replace(/^__ghost_move__/, "");
+}
+export function installUnifiedClickHandler({ unifiedRoot, opsByIdDirect, opsByIdRegion, opsByKey }) {
     const layout = document.getElementById("layout-new");
     const svg = document.getElementById("graph-new");
     if (!layout && !svg) return;
 
     const handler = (e) => {
-        const hit = e.target.closest?.("[element-id]");
-        if (!hit) return;
+        const hit = e.target.closest?.("[element-id], [data-op-key]");
+        if (!hit) {
+            window.dispatchEvent(new CustomEvent("diff-element-empty-click"));
+            return;
+        }
 
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation?.();
 
-        const rawClicked = hit.getAttribute("element-id");
-        if (!rawClicked) return;
+        // strongest path: exact op stamped onto the visual element
+        const stampedKey =
+            hit.getAttribute("data-op-key") ||
+            hit.closest?.("[data-op-key]")?.getAttribute("data-op-key") ||
+            null;
 
-        const clickedId = normalizeElementId(rawClicked);
+        let opsForId = [];
+        let clickedId = null;
 
-        // direct ops for this id
-        let opsForId = []
-            .concat(opsByIdDirect.get(rawClicked) || [])
-            .concat(opsByIdDirect.get(clickedId) || [])
-            .concat(opsByIdDirect.get("ele-" + clickedId) || []);
+        if (stampedKey && opsByKey?.has(stampedKey)) {
+            const op = opsByKey.get(stampedKey);
+            opsForId = op ? [op] : [];
+            clickedId = op?.sidNew || op?.sidOld || null;
+        } else {
+            // fallback: old id-based behavior
+            const rawClicked = hit.getAttribute("element-id");
+            if (!rawClicked) {
+                window.dispatchEvent(new CustomEvent("diff-element-empty-click"));
+                return;
+            }
 
-        const xmlNode = unifiedRoot.querySelector?.(`*[id="${CSS.escape(clickedId)}"]`);
-        const clickedIsGateway = xmlNode && isGatewayTagName(tagName(xmlNode));
+            clickedId = normalizeElementId(rawClicked);
+            const baseClickedId = unwrapGhostId(clickedId);
 
-        // region fallback only if no direct ops AND gateway/group click
-        if (!opsForId.length && clickedIsGateway) {
-            const group = hit.closest?.("g.group") || hit.closest?.("svg") || null;
-            if (group) {
-                const descIds = collectDescendantElementIdsFromSvg(group);
-                for (const did of descIds) {
-                    for (const v of idVariants(did)) {
-                        const arr = opsByIdRegion.get(v) || [];
-                        if (arr.length) opsForId.push(...arr);
+            opsForId = []
+                .concat(opsByIdDirect.get(rawClicked) || [])
+                .concat(opsByIdDirect.get(clickedId) || [])
+                .concat(opsByIdDirect.get(baseClickedId) || [])
+                .concat(opsByIdDirect.get("ele-" + clickedId) || [])
+                .concat(opsByIdDirect.get("ele-" + baseClickedId) || []);
+
+            const xmlNode = unifiedRoot.querySelector?.(`*[id="${CSS.escape(clickedId)}"]`);
+            const clickedIsGateway = xmlNode && isGatewayTagName(tagName(xmlNode));
+            const clickedIsGhost = clickedId.startsWith("__ghost");
+
+            if (!opsForId.length && (clickedIsGateway || clickedIsGhost)) {
+                const group = hit.closest?.("g.group") || hit.closest?.("g.element") || hit.closest?.("svg") || null;
+                if (group) {
+                    const descIds = collectDescendantElementIdsFromSvg(group);
+                    for (const did of descIds) {
+                        for (const v of idVariants(did)) {
+                            const arr = opsByIdRegion.get(v) || [];
+                            if (arr.length) opsForId.push(...arr);
+                        }
                     }
                 }
             }
         }
 
         opsForId = dedupeOps(opsForId);
-        if (!opsForId.length) return;
+        if (clickedId.startsWith("__ghost_delete__")) {
+            const wanted = unwrapGhostId(clickedId);
+            const exactDelete = opsForId.filter(op =>
+                op.type === "delete" && (op.sidOld === wanted || op.selfOldId === wanted)
+            );
+            if (exactDelete.length) opsForId = exactDelete;
+        }
 
-
+        if (clickedId.startsWith("__ghost_move__")) {
+            const wanted = unwrapGhostId(clickedId);
+            const exactMove = opsForId.filter(op =>
+                (op.type === "move" || op.type === "moveupdate") &&
+                (op.sidOld === wanted || op.sidNew === wanted || op.selfOldId === wanted)
+            );
+            if (exactMove.length) opsForId = exactMove;
+        }
+        if (!opsForId.length) {
+            window.dispatchEvent(new CustomEvent("diff-element-empty-click"));
+            return;
+        }
+        console.log("clicks: clickedId", clickedId, "resolved ops", opsForId);
+        console.log("clicks: first resolved op JSON", JSON.stringify(opsForId?.[0] || null, null, 2));
         const payload = buildClickPayload(clickedId, opsForId);
 
         console.log("click payload", payload);
-        window.parent?.postMessage(payload, "*");
+
+        window.parent?.postMessage({
+            type: "DIFF_ELEMENT_CLICK",
+            payload
+        }, "*");
+
+        window.dispatchEvent(new CustomEvent("diff-element-click", { detail: payload }));
     };
 
-    // install once
     if (layout && !layout.__unifiedClickInstalled) {
         layout.__unifiedClickInstalled = true;
-        layout.addEventListener("click", handler, true); // capture
+        layout.addEventListener("click", handler, true);
     }
     if (svg && !svg.__unifiedClickInstalled) {
         svg.__unifiedClickInstalled = true;
-        svg.addEventListener("click", handler, true); // capture
+        svg.addEventListener("click", handler, true);
     }
 }

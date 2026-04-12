@@ -1,8 +1,80 @@
-import {nearestDrawable, tagName} from "../../integration/stableIds.js";
-import {preferStaticOldPath, rebaseNewPathDynamicToFinal, rebaseOldPathDynamicToStatic} from "./paths.js";
-import {atPath, buildOldWorkUntil, nodeAtPath, recoverById} from "./xml.js";
-import {diffSummaries, isMeaningfulUpdate, snapshotForNode} from "./snapshots.js";
+import {nearestDrawable, tagName, firstKRealTaskIds, gatewayStructureSig} from "../../integration/stableIds.js";
+import {
+    preferStaticOldPath,
+    rebaseNewPathDynamicToFinal,
+    rebaseOldPathDynamicToStatic
+} from "./paths.js";
+import {
+    atPath,
+    buildOldWorkUntil,
+    nodeAtPath,
+    recoverById
+} from "./xml.js";
+import {
+    diffSummaries,
+    isMeaningfulUpdate,
+    snapshotForNode
+} from "./snapshots.js";
 import {DIFF_BOUNDARY_TAGS} from "../../integration/tags.js";
+
+function isGatewayLike(node) {
+    if (!node) return false;
+    const t = tagName(node);
+    return (
+        t === "choose" ||
+        t === "parallel" ||
+        t === "loop" ||
+        t === "alternative" ||
+        t === "otherwise" ||
+        t === "parallel_branch"
+    );
+}
+
+function recoverGatewayOwnerNew(oldOwner, newRoot) {
+    if (!oldOwner || !newRoot) return null;
+
+    const oldTag = tagName(oldOwner);
+    const oldStruct = gatewayStructureSig(oldOwner);
+    const oldWitnesses = firstKRealTaskIds(oldOwner, 3);
+
+    // strongest fallback: find first witness in NEW, then climb to same gateway tag
+    for (const wid of oldWitnesses || []) {
+        const witnessNew = recoverById(newRoot, wid);
+        if (!witnessNew) continue;
+
+        let cur = witnessNew;
+        while (cur) {
+            if (cur.nodeType === 1 && tagName(cur) === oldTag) {
+                const struct = gatewayStructureSig(cur);
+                if (struct === oldStruct) return cur;
+            }
+            cur = cur.parentNode;
+        }
+    }
+
+    // broader fallback: scan all gateways of same tag and same structure
+    const all = Array.from(newRoot.getElementsByTagName("*"));
+    for (const el of all) {
+        if (tagName(el) !== oldTag) continue;
+        if (gatewayStructureSig(el) !== oldStruct) continue;
+
+        const w = firstKRealTaskIds(el, 3);
+        if (JSON.stringify(w || []) === JSON.stringify(oldWitnesses || [])) {
+            return el;
+        }
+    }
+
+    // weakest fallback: same tag only + at least one witness overlap
+    for (const el of all) {
+        if (tagName(el) !== oldTag) continue;
+
+        const w = firstKRealTaskIds(el, 3);
+        const overlap = (w || []).some(id => (oldWitnesses || []).includes(id));
+        if (overlap) return el;
+    }
+
+    return null;
+}
 
 export function normalizeOp(op, idx, ops, ctx) {
     const { isXy, oldRoot, newRoot } = ctx;
@@ -32,7 +104,6 @@ export function normalizeOp(op, idx, ops, ctx) {
         console.log("DEL PATH", { idx, raw: op.oldPath, rawId, rebasedOldPath, rebId });
     }
 
-
     if (isXy && op.oldPath && op.oldPath !== rebasedOldPath) {
         console.warn("XYDIFF SHOULD NOT REBASE BUT DID", op.oldPath, rebasedOldPath);
     }
@@ -52,15 +123,12 @@ export function normalizeOp(op, idx, ops, ctx) {
         });
     }
 
-
-
-    // STATIC lookup
     const oldNodeStatic = rebasedOldPath ? atPath(oldRoot, rebasedOldPath, isXy) : null;
     const oldNodeTag = oldNodeStatic ? tagName(oldNodeStatic) : null;
     const selfOldIsDrawable = !!(oldNodeStatic && DIFF_BOUNDARY_TAGS.has(oldNodeTag));
     const selfOldId = selfOldIsDrawable ? (oldNodeStatic.getAttribute("id") || null) : null;
     const newNode = rebasedNewPath ? atPath(newRoot, rebasedNewPath, isXy) : null;
-    // DYNAMIC lookup (only for CpeeDiff moves): "old just before this op"
+
     let oldNodeDynamic = null;
     if (!isXy && (op.type === "move" || op.type === "moveupdate") && op.oldPath) {
         const oldWork = buildOldWorkUntil(idx, ops, oldRoot, newRoot);
@@ -69,7 +137,7 @@ export function normalizeOp(op, idx, ops, ctx) {
 
     const oldNode = oldNodeStatic;
 
-    let ownerOld = oldNode ? nearestDrawable(oldNode) : null; // unchanged meaning (static OLD)
+    let ownerOld = oldNode ? nearestDrawable(oldNode) : null;
     let ownerOldDynamic = oldNodeDynamic ? nearestDrawable(oldNodeDynamic) : null;
 
     if (!isXy && (op.type === "move" || op.type === "moveupdate")) {
@@ -94,19 +162,17 @@ export function normalizeOp(op, idx, ops, ctx) {
         });
     }
 
-
     let ownerNew = newNode ? nearestDrawable(newNode) : null;
-
     let type = op.type;
+
     if (!isXy && op.type === "move" && op.oldPath) {
         debugOldPathMeaning(op, idx, ops, oldRoot);
     }
 
-
+    // XY fallback for updates without newPath
     if (isXy && type === "update" && !ownerNew && rebasedOldPath) {
         const candidateNew = nodeAtPath(newRoot, rebasedOldPath);
         if (candidateNew) {
-            // optional safety: only accept if it’s "the same kind of thing"
             const candOwnerNew = nearestDrawable(candidateNew);
             const tagOld = ownerOld ? tagName(ownerOld) : null;
             const tagNew = candOwnerNew ? tagName(candOwnerNew) : null;
@@ -117,13 +183,39 @@ export function normalizeOp(op, idx, ops, ctx) {
         }
     }
 
-    // insert of non-drawable node -> treat as update on owning drawable
+    // CpeeDiff fallback for updates without newPath
+    if (!isXy && type === "update" && !ownerNew) {
+        const oldOwnerId = ownerOld?.getAttribute?.("id") || null;
+
+        // direct id recovery
+        if (oldOwnerId) {
+            ownerNew = recoverById(newRoot, oldOwnerId);
+        }
+
+        // same rebased path in NEW
+        if (!ownerNew && rebasedOldPath) {
+            const candidateNew = nodeAtPath(newRoot, rebasedOldPath);
+            if (candidateNew) {
+                const candOwnerNew = nearestDrawable(candidateNew);
+                const tagOld = ownerOld ? tagName(ownerOld) : null;
+                const tagNew = candOwnerNew ? tagName(candOwnerNew) : null;
+
+                if (!tagOld || !tagNew || tagOld === tagNew) {
+                    ownerNew = candOwnerNew;
+                }
+            }
+        }
+
+        // gateway-specific fallback by witnesses/structure
+        if (!ownerNew && ownerOld && isGatewayLike(ownerOld)) {
+            ownerNew = recoverGatewayOwnerNew(ownerOld, newRoot);
+        }
+    }
+
     if (type === "insert" && newNode) {
         const selfDrawable = DIFF_BOUNDARY_TAGS.has(tagName(newNode));
         if (!selfDrawable && ownerNew) {
             type = "update";
-
-            // map update to owner drawable
             const nid = ownerNew.getAttribute("id");
             ownerOld = nid ? recoverById(oldRoot, nid) : null;
         }
@@ -133,14 +225,13 @@ export function normalizeOp(op, idx, ops, ctx) {
         const selfDrawable = DIFF_BOUNDARY_TAGS.has(tagName(oldNode));
         if (!selfDrawable) {
             type = "update";
-
             const oid = ownerOld.getAttribute("id");
             if (oid) ownerNew = recoverById(newRoot, oid);
         }
     }
 
-    // decide sidOld/sidNew
-    let sidOld = null, sidNew = null;
+    let sidOld = null;
+    let sidNew = null;
 
     if (type === "insert" || type === "update") {
         sidOld = op.id || ownerOld?.getAttribute("id") || null;
@@ -150,11 +241,19 @@ export function normalizeOp(op, idx, ops, ctx) {
         sidNew = ownerNew?.getAttribute("id") || null;
     }
 
-    // normalize update to one id
     if (type === "update") {
-        const sid = sidOld || sidNew;
-        sidOld = sid;
-        sidNew = sid;
+        // only mirror ids if one side exists
+        if (!sidOld && sidNew) sidOld = sidNew;
+        if (!sidNew && sidOld) sidNew = sidOld;
+
+        console.log("[UPDATE NORMALIZE]", {
+            oldPath: op.oldPath,
+            rebasedOldPath,
+            ownerOldId: ownerOld?.getAttribute?.("id") || null,
+            ownerNewId: ownerNew?.getAttribute?.("id") || null,
+            sidOld,
+            sidNew
+        });
     }
 
     const mergeOwnerId =
@@ -162,8 +261,7 @@ export function normalizeOp(op, idx, ops, ctx) {
             ? (ownerOldDynamic?.getAttribute?.("id") || ownerOld?.getAttribute?.("id") || null)
             : (ownerOld?.getAttribute?.("id") || null);
 
-    const mergeOwnerPath =
-        rebasedOldPath || op.oldPath || null;
+    const mergeOwnerPath = rebasedOldPath || op.oldPath || null;
 
     return {
         ...op,
@@ -183,8 +281,6 @@ export function normalizeOp(op, idx, ops, ctx) {
         selfOldId,
     };
 }
-
-
 export function attachUpdateContent(meta, ctx) {
     const { oldRoot, newRoot } = ctx;
 

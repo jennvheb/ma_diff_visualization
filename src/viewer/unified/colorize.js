@@ -1,6 +1,30 @@
 import {ghostifyId, idVariants, isGhostId} from "./ids.js";
 import {OP_COLOR, OP_PRIORITY} from "./config.js";
 
+function opKey(op) {
+    return [
+        op.type || "",
+        op.sidOld || "",
+        op.sidNew || "",
+        op.rebasedOldPath || "",
+        op.rebasedNewPath || "",
+        op.oldPath || "",
+        op.newPath || ""
+    ].join("|");
+}
+
+function stampOpMetadata(gEl, op) {
+    if (!gEl || !op) return;
+
+    gEl.setAttribute("data-op-key", opKey(op));
+    gEl.setAttribute("data-op-type", op.type || "");
+
+    if (op.sidOld) gEl.setAttribute("data-sid-old", op.sidOld);
+    if (op.sidNew) gEl.setAttribute("data-sid-new", op.sidNew);
+
+    if (op.rebasedOldPath) gEl.setAttribute("data-old-path", op.rebasedOldPath);
+    if (op.rebasedNewPath) gEl.setAttribute("data-new-path", op.rebasedNewPath);
+}
 export function buildIdIndex(rootEl) {
     const idx = new Map();
     if (!rootEl) return idx;
@@ -137,6 +161,23 @@ export function colorizeUnified(idx, metaOps) {
         }
 
         if (op.type === "update") {
+            console.log("colorize update: op", {
+                sidOld: op.sidOld,
+                sidNew: op.sidNew,
+                oldPath: op.oldPath,
+                rebasedOldPath: op.rebasedOldPath,
+                contentDiff: op.contentDiff
+            });
+        }
+        const lookupId = op.sidNew || op.sidOld;
+        console.log("colorize update: lookupId", lookupId);
+
+        const hits =
+            (idx.get(lookupId) || []).length +
+            (idx.get("ele-" + lookupId) || []).length;
+
+        console.log("colorize update: hits", hits);
+        if (op.type === "update") {
             // updates can color the real node
             const sid = op.sidNew || op.sidOld;
             if (sid) idsToColor.add(sid);
@@ -188,8 +229,13 @@ export function colorizeUnified(idx, metaOps) {
                 const strokeOverride = ghostStrokeFor(logicalId, color);
 
 
-                // pass context flags into colorNodeBody:
-                colorNodeBody(g, color, op.type, strokeOverride, { inDeleteCtx, inMoveCtx, isMoveGhost, isDeleteGhost });
+                stampOpMetadata(g, op);
+                colorNodeBody(g, color, op.type, strokeOverride, {
+                    inDeleteCtx,
+                    inMoveCtx,
+                    isMoveGhost,
+                    isDeleteGhost
+                });
 
             }
         }

@@ -52,6 +52,50 @@
         .canvas { overflow: auto; position: relative; }
         .canvas svg { width: 100%; display: block; }
 
+        #undo-popover {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            width: 320px;
+            max-width: calc(100vw - 32px);
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+            padding: 12px;
+            z-index: 9999;
+        }
+
+        #undo-popover-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        #undo-popover-body {
+            font-size: 13px;
+            color: #444;
+            margin-bottom: 10px;
+            max-height: 180px;
+            overflow: auto;
+        }
+
+        #undo-popover-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        #undo-popover button {
+            border: 1px solid #ccc;
+            background: #fff;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
+        #undo-popover button:hover {
+            background: #f7f7f7;
+        }
+
         [data-hitbox] { stroke-width: 2 !important; }
     </style>
 </head>
@@ -76,6 +120,14 @@
     </div>
 </div>
 
+<div id="undo-popover" hidden>
+    <div id="undo-popover-title">Selected change</div>
+    <div id="undo-popover-body"></div>
+    <div id="undo-popover-actions">
+        <button id="undo-btn" type="button">Undo</button>
+        <button id="undo-cancel-btn" type="button">Close</button>
+    </div>
+</div>
 
 <script src="./diff_data.js"></script>
 <script type="module" src="./unified/index.js"></script>
