@@ -1,5 +1,5 @@
 import http from "node:http";
-import {computeDiffState} from "./computeDiffState.js";
+import {computeDiffState} from "../run/computeDiffState.js";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 

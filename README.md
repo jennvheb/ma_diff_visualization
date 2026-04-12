@@ -61,3 +61,17 @@ node main.js --algo=cpeediff --anchor=label
   ```
 then open the index.html  
 
+## Using the endpoint
+Go to the /src/run folder and run
+```
+node server.js 
+```
+then call 
+```
+curl -X POST http://localhost:3000/diff \
+  -F "old=@./testset/testfile1.xml" \
+  -F "new=@./testset/testfile2.xml" \
+  -F "algo=[cpeediff or xydiff]" \
+  -F "anchors=[anchor choice for cpeediff]"
+```
+while changing the filenames and paths to the files you want to diff on. The returned output is: diffSource, diffOps, rawDiffXml, oldTreeXml, newTreeXml
