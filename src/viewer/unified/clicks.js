@@ -33,6 +33,9 @@ export function buildOpsByIdDirect(metaOps) {
     for (const op of metaOps) {
         if (op.sidOld) add(op.sidOld, op);
         if (op.sidNew) add(op.sidNew, op);
+        if (op.selfOldId) add(op.selfOldId, op);
+        if (op.mergeOwnerId) add(op.mergeOwnerId, op);
+        if (op.id) add(op.id, op);
     }
     return m;
 }
@@ -160,11 +163,21 @@ export function installUnifiedClickHandler({ unifiedRoot, opsByIdDirect, opsById
             const clickedIsGateway = xmlNode && isGatewayTagName(tagName(xmlNode));
             const clickedIsGhost = clickedId.startsWith("__ghost");
 
-            if (!opsForId.length && (clickedIsGateway || clickedIsGhost)) {
-                const group = hit.closest?.("g.group") || hit.closest?.("g.element") || hit.closest?.("svg") || null;
+            // if direct lookup fails, try region lookup from the surrounding SVG group
+            if (!opsForId.length) {
+                const group =
+                    hit.closest?.("g.group") ||
+                    hit.closest?.("g.element") ||
+                    hit.closest?.("svg") ||
+                    null;
+
                 if (group) {
                     const descIds = collectDescendantElementIdsFromSvg(group);
-                    for (const did of descIds) {
+
+                    // include clicked id
+                    const allIds = [rawClicked, clickedId, baseClickedId, ...descIds];
+
+                    for (const did of allIds) {
                         for (const v of idVariants(did)) {
                             const arr = opsByIdRegion.get(v) || [];
                             if (arr.length) opsForId.push(...arr);
@@ -209,11 +222,20 @@ export function installUnifiedClickHandler({ unifiedRoot, opsByIdDirect, opsById
         window.dispatchEvent(new CustomEvent("diff-element-click", { detail: payload }));
     };
 
-    if (layout && !layout.__unifiedClickInstalled) {
+    if (layout) {
+        if (layout.__unifiedClickHandler) {
+            layout.removeEventListener("click", layout.__unifiedClickHandler, true);
+        }
+        layout.__unifiedClickHandler = handler;
         layout.__unifiedClickInstalled = true;
         layout.addEventListener("click", handler, true);
     }
-    if (svg && !svg.__unifiedClickInstalled) {
+
+    if (svg) {
+        if (svg.__unifiedClickHandler) {
+            svg.removeEventListener("click", svg.__unifiedClickHandler, true);
+        }
+        svg.__unifiedClickHandler = handler;
         svg.__unifiedClickInstalled = true;
         svg.addEventListener("click", handler, true);
     }

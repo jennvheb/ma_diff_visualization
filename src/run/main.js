@@ -16,8 +16,8 @@ const __dirname = path.dirname(__filename);
 
 const ALGO = (args.get("algo") ?? "cpeediff").toLowerCase();
 
-const OLD = args.get("old") ?? "./testset/visualize_one_premove.xml";
-const NEW = args.get("new") ?? "./testset/visualize_one_2ins_1del_1mov.xml";
+const OLD = args.get("old") ?? "../viewer/testset/visualize_one_premove.xml";
+const NEW = args.get("new") ?? "../viewer/testset/visualize_one_2ins_1del_1mov.xml";
 
 const rawPassthrough =
     (args.get("raw") ?? "").toLowerCase() === "true" || args.has("raw");

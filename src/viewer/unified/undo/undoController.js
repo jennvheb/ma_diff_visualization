@@ -14,6 +14,7 @@ function scoreOpForClickedId(op, clickedId) {
 
     if (op.sidNew === clickedId) score += 10;
     if (op.sidOld === clickedId) score += 10;
+    if (op.id === clickedId) score += 8;
     if (op.selfOldId === clickedId) score += 6;
     if (op.mergeOwnerId === clickedId) score += 4;
 
@@ -46,6 +47,23 @@ function renderXmlBlock(label, xml) {
             <pre style="margin:4px 0 0; padding:8px; background:#f7f7f7; border:1px solid #eee; border-radius:6px; overflow:auto; font-size:12px; white-space:pre-wrap;">${esc(xml)}</pre>
         </div>
     `;
+}
+
+function expandUndoOps(op) {
+    if (!op) return [];
+
+    if (op.type === "moveupdate") {
+        if (op.updateOp && op.moveOp) {
+            return [op.updateOp, op.moveOp];
+        }
+
+        return [
+            { ...op, type: "update" },
+            { ...op, type: "move" }
+        ];
+    }
+
+    return [op];
 }
 
 export function installUndoController() {
@@ -116,13 +134,11 @@ export function installUndoController() {
 
         const msg = {
             type: "UNDO_REQUEST",
-            op: state.selectedOp
+            ops: expandUndoOps(state.selectedOp)
         };
 
         console.log("UNDO sending request", msg);
         window.parent?.postMessage(msg, "*");
-        console.log("UNDO selectedOp JSON", JSON.stringify(state.selectedOp, null, 2));
-        // for local testing
         window.dispatchEvent(new CustomEvent("undo-request", { detail: msg }));
     });
 

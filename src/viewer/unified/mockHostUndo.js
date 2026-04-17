@@ -1,4 +1,4 @@
-import {reverseOperation} from "./undo/reverseOperation.js";
+import {reverseOperations} from "./undo/reverseOperation.js";
 
 async function recomputeDiffOnHost({ oldXml, newXml }) {
     let resp;
@@ -43,16 +43,16 @@ export function installMockHostUndo({ rerender }) {
 
     window.addEventListener("undo-request", async (e) => {
         const msg = e.detail;
-        const op = msg?.op;
-        if (!op) return;
+        const ops = msg?.ops;
+        if (!ops?.length) return;
 
-        console.log("mock host received undo request json", JSON.stringify(op, null, 2));
+        console.log("mock host received undo request json", JSON.stringify(ops, null, 2));
 
         try {
-            const nextNewXml = reverseOperation({
+            const nextNewXml = reverseOperations({
                 baselineOldXml: state.baselineOldXml,
                 currentNewXml: state.currentNewXml,
-                op
+                ops
             });
 
             const diffResult = await recomputeDiffOnHost({

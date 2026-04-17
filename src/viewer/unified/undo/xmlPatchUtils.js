@@ -41,7 +41,7 @@ export function findElementByRebasedPath(root, path) {
 
     for (const seg of segs) {
         const kids = childElements(cur);
-        cur = kids[seg - 1] || null;
+        cur = kids[seg] || null;
         if (!cur) return null;
     }
     return cur;
@@ -105,4 +105,19 @@ export function resolveNodeByPath(root, path) {
 // try ID first, then path. Keep this only for places where that fallback is really intended.
 export function resolveNode(root, { id, path }) {
     return resolveNodeById(root, id) || resolveNodeByPath(root, path);
+}
+
+export function resolveNodeRobust(root, {
+    realId,
+    sid,
+    canonicalPath,
+    rebasedPath
+}) {
+    return (
+        resolveNodeById(root, realId) ||
+        resolveNodeById(root, sid) ||
+        resolveNodeByPath(root, canonicalPath) ||
+        resolveNodeByPath(root, rebasedPath) ||
+        null
+    );
 }

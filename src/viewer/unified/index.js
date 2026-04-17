@@ -7,7 +7,7 @@ import {toSegs} from "./config.js";
 import {insertGhost} from "./placement.js";
 import {buildIdIndex, colorizeUnified} from "./colorize.js";
 import {buildOpsByIdDirect, buildOpsByIdRegion, buildOpsByKey, installUnifiedClickHandler} from "./clicks.js";
-import {installUndoController} from "./undoController.js";
+import {installUndoController} from "./undo/undoController.js";
 import {installMockHostUndo} from "./mockHostUndo.js";
 
 function logSampleOps(metaOps) {
@@ -27,17 +27,26 @@ function logSampleOps(metaOps) {
 function clearUnifiedCanvas() {
     const graph = document.getElementById("graph-new");
     if (graph) {
+        if (graph.__unifiedClickHandler) {
+            graph.removeEventListener("click", graph.__unifiedClickHandler, true);
+            delete graph.__unifiedClickHandler;
+        }
         graph.innerHTML = "";
         delete graph.__unifiedClickInstalled;
     }
 
     const layout = document.getElementById("layout-new");
     if (layout) {
+        if (layout.__unifiedClickHandler) {
+            layout.removeEventListener("click", layout.__unifiedClickHandler, true);
+            delete layout.__unifiedClickHandler;
+        }
         delete layout.__unifiedClickInstalled;
     }
 
     delete window.colorUnifiedSvg;
 }
+
 function isMoveLike(op) {
     return op?.type === "move" || op?.type === "moveupdate";
 }

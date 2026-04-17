@@ -8,7 +8,7 @@ import {
     cloneIntoDoc,
     replaceElement,
     removeElement,
-    insertElementAt, resolveNodeById, resolveNodeByPath
+    insertElementAt, resolveNodeById, resolveNodeByPath, resolveNodeRobust
 } from "./xmlPatchUtils.js";
 import {stampLogicalIds} from "../../../integration/stableIds.js";
 
@@ -52,11 +52,12 @@ function reverseInsert({ currentNewXml, op }) {
     stampLogicalIds(newLookup);
 
     // resolve the inserted node in the stamped lookup tree
-    const targetLookup =
-        resolveNode(newLookup, {
-            id: op.sidNew || op.sidOld,
-            path: op.rebasedNewPath || op.newPath
-        });
+    const targetLookup = resolveNodeRobust(newLookup, {
+        realId: op.id || op.selfOldId,
+        sid: op.sidNew || op.sidOld,
+        canonicalPath: op.newPath,
+        rebasedPath: op.rebasedNewPath
+    });
 
     if (!targetLookup) {
         throw new Error(
@@ -194,11 +195,12 @@ function reverseMove({ baselineOldXml, currentNewXml, op }) {
     stampLogicalIds(oldLookup);
     stampLogicalIds(newLookup);
 
-    const sourceOldLookup =
-        resolveNode(oldLookup, {
-            id: op.sidOld,
-            path: op.rebasedOldPath || op.oldPath
-        });
+    const sourceOldLookup = resolveNodeRobust(oldLookup, {
+        realId: op.id || op.selfOldId,
+        sid: op.sidOld,
+        canonicalPath: op.oldPath,
+        rebasedPath: op.rebasedOldPath
+    });
 
     if (!sourceOldLookup) {
         throw new Error(
@@ -206,11 +208,12 @@ function reverseMove({ baselineOldXml, currentNewXml, op }) {
         );
     }
 
-    const targetNewLookup =
-        resolveNode(newLookup, {
-            id: op.sidNew || op.sidOld,
-            path: op.rebasedNewPath || op.newPath
-        });
+    const targetNewLookup = resolveNodeRobust(newLookup, {
+        realId: op.id || op.selfOldId,
+        sid: op.sidNew || op.sidOld,
+        canonicalPath: op.newPath,
+        rebasedPath: op.rebasedNewPath
+    });
 
     if (!targetNewLookup) {
         throw new Error(
@@ -368,11 +371,12 @@ function reverseDelete({ baselineOldXml, currentNewXml, op }) {
     stampLogicalIds(newLookup);
 
     // find deleted node in stamped OLD lookup tree
-    const sourceOldLookup =
-        resolveNode(oldLookup, {
-            id: op.sidOld,
-            path: op.rebasedOldPath || op.oldPath
-        });
+    const sourceOldLookup = resolveNodeRobust(oldLookup, {
+        realId: op.id || op.selfOldId,
+        sid: op.sidOld,
+        canonicalPath: op.oldPath,
+        rebasedPath: op.rebasedOldPath
+    });
 
     if (!sourceOldLookup) {
         throw new Error(
@@ -483,17 +487,12 @@ function reverseUpdate({ baselineOldXml, currentNewXml, op }) {
     stampLogicalIds(newLookup);
 
     // OLD lookup node
-    let sourceOldLookup = null;
-
-    if (op.sidOld) {
-        sourceOldLookup = resolveNodeById(oldLookup, op.sidOld);
-    }
-    if (!sourceOldLookup && (op.rebasedOldPath || op.oldPath)) {
-        sourceOldLookup = resolveNodeByPath(
-            oldLookup,
-            op.rebasedOldPath || op.oldPath
-        );
-    }
+    const sourceOldLookup = resolveNodeRobust(oldLookup, {
+        realId: op.id || op.selfOldId,
+        sid: op.sidOld,
+        canonicalPath: op.oldPath,
+        rebasedPath: op.rebasedOldPath
+    });
 
     if (!sourceOldLookup) {
         throw new Error(
@@ -501,27 +500,12 @@ function reverseUpdate({ baselineOldXml, currentNewXml, op }) {
         );
     }
 
-    // NEW lookup node
-    let targetNewLookup = null;
-
-    // try stored NEW id
-    if (op.sidNew) {
-        targetNewLookup = resolveNodeById(newLookup, op.sidNew);
-    }
-
-    // try explicit NEW path
-    if (!targetNewLookup && (op.rebasedNewPath || op.newPath)) {
-        targetNewLookup = resolveNodeByPath(
-            newLookup,
-            op.rebasedNewPath || op.newPath
-        );
-    }
-
-    // if sidNew is stale, try sidOld in NEW as well
-    // this is common after rerenders/reverts when synthetic ids get restamped
-    if (!targetNewLookup && op.sidOld) {
-        targetNewLookup = resolveNodeById(newLookup, op.sidOld);
-    }
+    let targetNewLookup = resolveNodeRobust(newLookup, {
+        realId: op.id || op.selfOldId,
+        sid: op.sidNew || op.sidOld,
+        canonicalPath: op.newPath,
+        rebasedPath: op.rebasedNewPath
+    });
 
     // final fallback: use the structural position of the OLD lookup node
     // and recover the corresponding node in current NEW
@@ -591,8 +575,10 @@ function reverseUpdate({ baselineOldXml, currentNewXml, op }) {
     console.log("reverseUpdate resolved", {
         sidOld: op.sidOld || null,
         sidNew: op.sidNew || null,
-        lookupOldPath: op.rebasedOldPath || op.oldPath || null,
-        lookupNewPath: op.rebasedNewPath || op.newPath || null,
+        lookupOldPath: op.oldPath || op.rebasedOldPath || null,
+        lookupNewPath:  op.newPath || op.rebasedNewPath || null,
+       // lookupOldPath: op.rebasedOldPath || op.oldPath || null,
+       // lookupNewPath: op.rebasedNewPath || op.newPath || null,
         oldRealPath,
         newRealPath,
         oldTag: sourceOldReal.localName,
@@ -648,6 +634,19 @@ function reverseUpdate({ baselineOldXml, currentNewXml, op }) {
     return serializeXml(newDoc);
 }
 
+export function reverseOperations({ baselineOldXml, currentNewXml, ops }) {
+    let xml = currentNewXml;
+
+    for (const op of ops) {
+        xml = reverseOperation({
+            baselineOldXml,
+            currentNewXml: xml,
+            op
+        });
+    }
+
+    return xml;
+}
 export function reverseOperation({ baselineOldXml, currentNewXml, op }) {
     if (!op?.type) {
         throw new Error("reverseOperation: missing op.type");
