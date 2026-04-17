@@ -1,0 +1,6 @@
+src/viewer/testset/*.xml
+src/run/diff_data.js
+src/viewer/*.xml
+xydiff-bin/*.xml
+.idea/vcs.xml
+.idea/modules.xml
