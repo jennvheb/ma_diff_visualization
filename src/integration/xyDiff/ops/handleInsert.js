@@ -19,6 +19,39 @@ import {
 import {buildXyDiffXidIndex} from "../xid/xidMap.js";
 import {NON_STRUCTURAL_MOVE_TAGS} from "../../tags.js";
 
+function isOwnerPartOfPendingMove(state, ownerOldPath) {
+    if (!ownerOldPath) return false;
+
+    for (const del of state.pendingMoveDeletes.values()) {
+        if (!del?.oldPath) continue;
+        if (del.oldPath === ownerOldPath) return true;
+    }
+
+    return false;
+}
+
+function isIdInRename(id, state) {
+    if (!id) return false;
+
+    return (
+        state.renamedNewIds?.has(String(id)) ||
+        state.renamedIdPairs?.has(String(id)) ||
+        [...(state.renamedIdPairs?.values?.() || [])].includes(String(id))
+    );
+}
+
+function findDeleteOpByOldId(operations, baseOld, id) {
+    if (!id) return null;
+
+    return operations.find(o => {
+        if (o.kind !== "delete" || !o.oldPath) return false;
+
+        const oldEl = elementByRelIndexPath(baseOld, o.oldPath);
+        const oldId = oldEl?.getAttribute?.("id") || null;
+
+        return oldId && String(oldId) === String(id);
+    }) || null;
+}
 
 export function handleInsert(edit, ctx, state) {
     const { baseOld, baseNew, newXidIndex, newDom, serializer } = ctx;
@@ -125,13 +158,91 @@ export function handleInsert(edit, ctx, state) {
 
         if (payloadId) {
             const oldRel = findOldRelById(baseOld, payloadId);
-            if (oldRel) {
+
+            if (oldRel && !isIdInRename(payloadId, state)) {
+                const oldPath = snapRelPathToDrawable(baseOld, oldRel);
+
+                const matchingDelete = findDeleteOpByOldId(
+                    state.operations,
+                    baseOld,
+                    payloadId
+                );
+
+                if (matchingDelete) {
+                    const moveOldPath = matchingDelete.oldPath || oldPath;
+
+                    console.error("same id delete+insert", {
+                        id: payloadId,
+                        oldPath,
+                        deletedPath: matchingDelete.oldPath,
+                        moveOldPath,
+                        newPath
+                    });
+
+                    const deleteIdx = state.operations.indexOf(matchingDelete);
+                    if (deleteIdx >= 0) state.operations.splice(deleteIdx, 1);
+
+                    if (moveOldPath && newPath && moveOldPath !== newPath) {
+                        console.error("same id delete+insert becomes move", {
+                            id: payloadId,
+                            oldPath: moveOldPath,
+                            newPath
+                        });
+
+                        state.operations.push({
+                            kind: "move",
+                            oldPath: moveOldPath,
+                            newPath
+                        });
+
+                        return;
+                    }
+
+                    console.error("same id delete insert becomes update", {
+                        id: payloadId,
+                        oldPath: moveOldPath,
+                        newPath
+                    });
+
+                    pushUpdateNode(
+                        state.operations,
+                        baseOld,
+                        moveOldPath,
+                        payload
+                    );
+
+                    return;
+                }
+
+                if (oldPath && newPath && oldPath !== newPath) {
+                    console.error("same id delete+insert becomes move paths don't match", {
+                        id: payloadId,
+                        oldPath,
+                        newPath
+                    });
+
+                    state.operations.push({
+                        kind: "move",
+                        oldPath,
+                        newPath
+                    });
+
+                    return;
+                }
+
+                console.error("fallback same id becomes update", {
+                    id: payloadId,
+                    oldPath,
+                    newPath
+                });
+
                 pushUpdateNode(
                     state.operations,
                     baseOld,
-                    snapRelPathToDrawable(baseOld, oldRel),
+                    oldPath,
                     payload
                 );
+
                 return;
             }
         }
@@ -178,13 +289,19 @@ export function handleInsert(edit, ctx, state) {
             }
 
             if (ownerOldPath) {
-                console.error("[OWNER DEBUG]", {
+                const skipBecausePendingMove = isOwnerPartOfPendingMove(state, ownerOldPath);
+
+                console.error("owner debug", {
                     newPath,
                     ownerOldPath_raw: ownerOldPath,
-                    ownerOldTag: elementByRelIndexPath(baseOld, ownerOldPath)?.localName || null
+                    ownerOldTag: elementByRelIndexPath(baseOld, ownerOldPath)?.localName || null,
+                    skipBecausePendingMove
                 });
-                pushUpdateNode(state.operations, baseOld, ownerOldPath, payload);
-                return;
+
+                if (!skipBecausePendingMove) {
+                    pushUpdateNode(state.operations, baseOld, ownerOldPath, payload);
+                    return;
+                }
             }
         }
 

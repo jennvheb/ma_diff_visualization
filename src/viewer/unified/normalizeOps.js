@@ -16,6 +16,7 @@ import {
     snapshotForNode
 } from "./snapshots.js";
 import {DIFF_BOUNDARY_TAGS} from "../../integration/tags.js";
+import {indexPathForNodeRelative} from "../../integration/xyDiff/dom/pathUtils.js";
 
 function isGatewayLike(node) {
     if (!node) return false;
@@ -28,6 +29,71 @@ function isGatewayLike(node) {
         t === "otherwise" ||
         t === "parallel_branch"
     );
+}
+
+function nearestTaskFromPathPrefix(root, path, isXy) {
+    if (!root || !path) return null;
+
+    const parts = String(path).split("/").filter(Boolean);
+
+    while (parts.length > 0) {
+        const p = "/" + parts.join("/");
+        const n = atPath(root, p, isXy) || nodeAtPath(root, p);
+
+        if (n && n.nodeType === 1) {
+            let cur = n;
+            while (cur && cur.nodeType === 1) {
+                const t = tagName(cur);
+                if (t === "call" || t === "manipulate" || t === "stop") {
+                    return cur;
+                }
+                cur = cur.parentNode;
+            }
+        }
+
+        parts.pop();
+    }
+
+    return null;
+}
+
+function updatePayloadText(op) {
+    return [
+        op.payloadTag,
+        op.payloadText,
+        op.payloadXml,
+        op.newValue,
+        op.value,
+        op.text,
+        op.meta?.newValue,
+        op.meta?.text,
+        op.meta?.kind
+    ]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+}
+
+function updateLooksLikeTaskText(op) {
+    const s = updatePayloadText(op);
+    return /label|urls|url|method|arguments|parameters|_text|newValue/i.test(s);
+}
+function nearestDrawableFromPathPrefix(root, path, isXy) {
+    if (!root || !path) return null;
+
+    const parts = String(path).split("/").filter(Boolean);
+
+    while (parts.length > 0) {
+        const p = "/" + parts.join("/");
+        const n = atPath(root, p, isXy) || nodeAtPath(root, p);
+        const d = n ? nearestDrawable(n) : null;
+
+        if (d) return d;
+
+        parts.pop();
+    }
+
+    return null;
 }
 
 function recoverGatewayOwnerNew(oldOwner, newRoot) {
@@ -83,18 +149,19 @@ export function normalizeOp(op, idx, ops, ctx) {
     if (op.oldPath) {
         if (isXy) {
             rebasedOldPath = op.oldPath;
-        } else if (
-            op.type === "move" ||
-            op.type === "moveupdate" ||
-            op.type === "delete"
-        ) {
+        } else if (op.type === "move" || op.type === "moveupdate") {
+            rebasedOldPath = rebaseOldPathDynamicToStatic(op.oldPath, idx, ops);
+        } else if (op.type === "delete") {
+            // CpeeDiff delete paths already identify the deleted node in the old working tree, rebasing can lead to wrong ids/paths
+            rebasedOldPath = rebaseOldPathDynamicToStatic(op.oldPath, idx, ops);
+        } else if (op.type === "update" && updateLooksLikeTaskText(op)) {
             rebasedOldPath = rebaseOldPathDynamicToStatic(op.oldPath, idx, ops);
         } else {
             rebasedOldPath = preferStaticOldPath(op, idx, ops, oldRoot);
         }
     }
 
-    const rebasedNewPath = op.newPath
+    let rebasedNewPath = op.newPath
         ? (isXy ? op.newPath : rebaseNewPathDynamicToFinal(op.newPath, idx, ops))
         : null;
 
@@ -127,18 +194,75 @@ export function normalizeOp(op, idx, ops, ctx) {
     const oldNodeTag = oldNodeStatic ? tagName(oldNodeStatic) : null;
     const selfOldIsDrawable = !!(oldNodeStatic && DIFF_BOUNDARY_TAGS.has(oldNodeTag));
     const selfOldId = selfOldIsDrawable ? (oldNodeStatic.getAttribute("id") || null) : null;
-    const newNode = rebasedNewPath ? atPath(newRoot, rebasedNewPath, isXy) : null;
+    let newNode = rebasedNewPath ? atPath(newRoot, rebasedNewPath, isXy) : null;
+
+    // CpeeDiff insert paths are often dynamic/shifted.
+    // If the inserted payload has an id, that is the real node.
+    if (!isXy && op.type === "insert" && op.id) {
+        const byId = recoverById(newRoot, op.id);
+        if (byId) {
+            newNode = byId;
+            const p = indexPathForNodeRelative(newRoot, byId);
+            if (p) rebasedNewPath = p;
+        }
+    }
 
     let oldNodeDynamic = null;
-    if (!isXy && (op.type === "move" || op.type === "moveupdate") && op.oldPath) {
+    if (!isXy && (op.type === "move" || op.type === "moveupdate" || op.type === "update") && op.oldPath) {
         const oldWork = buildOldWorkUntil(idx, ops, oldRoot, newRoot);
         oldNodeDynamic = nodeAtPath(oldWork, op.oldPath);
     }
 
     const oldNode = oldNodeStatic;
+    let type = op.type;
 
     let ownerOld = oldNode ? nearestDrawable(oldNode) : null;
     let ownerOldDynamic = oldNodeDynamic ? nearestDrawable(oldNodeDynamic) : null;
+    // CpeeDiff drawable update: payload itself identifies the real node.
+    if (!isXy && type === "update" && op.id) {
+        const oldById = recoverById(oldRoot, op.id);
+        const newById = recoverById(newRoot, op.id);
+
+        if (oldById) {
+            ownerOld = oldById;
+            const p = indexPathForNodeRelative(oldRoot, oldById);
+            if (p) rebasedOldPath = p;
+        }
+
+        if (newById) {
+            newNode = newById;
+            const p = indexPathForNodeRelative(newRoot, newById);
+            if (p) rebasedNewPath = p;
+        }
+    }
+    if (!isXy && type === "update" && !ownerOld && ownerOldDynamic) {
+        const dynId = ownerOldDynamic.getAttribute?.("id") || null;
+
+        if (dynId && !String(dynId).startsWith("__gw_")) {
+            const staticById = recoverById(oldRoot, dynId);
+            const newById = recoverById(newRoot, dynId);
+
+            if (staticById) {
+                ownerOld = staticById;
+                const p = indexPathForNodeRelative(oldRoot, staticById);
+                if (p) rebasedOldPath = p;
+            }
+
+            if (newById) {
+                newNode = newById;
+            }
+        }
+    }
+    if (!ownerOld && !isXy && type === "update" && updateLooksLikeTaskText(op)) {
+        ownerOld = nearestTaskFromPathPrefix(oldRoot, rebasedOldPath, isXy);
+    }
+    if (!isXy && op.type === "update") {
+        console.log("UPDATE OP SHAPE", {
+            keys: Object.keys(op),
+            op,
+            payloadText: updatePayloadText(op)
+        });
+    }
 
     if (!isXy && (op.type === "move" || op.type === "moveupdate")) {
         console.log("MOVE CHECK", {
@@ -163,7 +287,25 @@ export function normalizeOp(op, idx, ops, ctx) {
     }
 
     let ownerNew = newNode ? nearestDrawable(newNode) : null;
-    let type = op.type;
+
+    // CpeeDiff: for moves, never trust newPath as final identity.
+// The moved node identity is the OLD owner id, so recover that same id in NEW.
+    if (!isXy && (type === "move" || type === "moveupdate")) {
+        const movedId =
+            ownerOldDynamic?.getAttribute?.("id") ||
+            ownerOld?.getAttribute?.("id") ||
+            op.id ||
+            null;
+
+        if (movedId && !String(movedId).startsWith("__gw_")) {
+            const realNew = recoverById(newRoot, movedId);
+            if (realNew) {
+                ownerNew = realNew;
+                const p = indexPathForNodeRelative(newRoot, realNew);
+                if (p) rebasedNewPath = p;
+            }
+        }
+    }
 
     if (!isXy && op.type === "move" && op.oldPath) {
         debugOldPathMeaning(op, idx, ops, oldRoot);
@@ -171,18 +313,48 @@ export function normalizeOp(op, idx, ops, ctx) {
 
     // XY fallback for updates without newPath
     if (isXy && type === "update" && !ownerNew && rebasedOldPath) {
-        const candidateNew = nodeAtPath(newRoot, rebasedOldPath);
-        if (candidateNew) {
-            const candOwnerNew = nearestDrawable(candidateNew);
+        const oldOwnerId = ownerOld?.getAttribute?.("id") || null;
+
+        // same logical id in NEW
+        if (oldOwnerId) {
+            const byId = recoverById(newRoot, oldOwnerId);
+            if (byId) {
+                ownerNew = nearestDrawable(byId);
+            }
+        }
+
+        // fallback: same path only if it is really the same node
+        if (!ownerNew) {
+            const candidateNew = nodeAtPath(newRoot, rebasedOldPath);
+            const candOwnerNew = candidateNew ? nearestDrawable(candidateNew) : null;
+
             const tagOld = ownerOld ? tagName(ownerOld) : null;
             const tagNew = candOwnerNew ? tagName(candOwnerNew) : null;
 
-            if (!tagOld || !tagNew || tagOld === tagNew) {
+            const candId = candOwnerNew?.getAttribute?.("id") || null;
+
+            const oldIsSyntheticGateway =
+                oldOwnerId && String(oldOwnerId).startsWith("__gw_");
+
+            if (
+                candOwnerNew &&
+                (!tagOld || !tagNew || tagOld === tagNew) &&
+                (
+                    !oldOwnerId ||
+                    !candId ||
+                    oldOwnerId === candId ||
+                    oldIsSyntheticGateway
+                )
+            ) {
                 ownerNew = candOwnerNew;
             }
         }
     }
-
+    // XY gateway fallback: same path may fail after branch deletion / move,
+    // but the gateway can still be recovered by witnesses/structure
+    if (isXy && type === "update" && !ownerNew && ownerOld && isGatewayLike(ownerOld)) {
+        ownerNew = recoverGatewayOwnerNew(ownerOld, newRoot);
+    }
     // CpeeDiff fallback for updates without newPath
     if (!isXy && type === "update" && !ownerNew) {
         const oldOwnerId = ownerOld?.getAttribute?.("id") || null;
@@ -214,13 +386,20 @@ export function normalizeOp(op, idx, ops, ctx) {
 
     if (type === "insert" && newNode) {
         const selfDrawable = DIFF_BOUNDARY_TAGS.has(tagName(newNode));
-        if (!selfDrawable && ownerNew) {
-            type = "update";
+
+        if (isXy && !selfDrawable && ownerNew) {
             const nid = ownerNew.getAttribute("id");
-            ownerOld = nid ? recoverById(oldRoot, nid) : null;
+            const oldOwner = nid ? recoverById(oldRoot, nid) : null;
+
+            if (oldOwner) {
+                type = "update";
+                ownerOld = oldOwner;
+
+                const oldOwnerPath = indexPathForNodeRelative(oldRoot, oldOwner);
+                if (oldOwnerPath) rebasedOldPath = oldOwnerPath;
+            }
         }
     }
-
     if (type === "delete" && oldNode && ownerOld) {
         const selfDrawable = DIFF_BOUNDARY_TAGS.has(tagName(oldNode));
         if (!selfDrawable) {
@@ -233,12 +412,20 @@ export function normalizeOp(op, idx, ops, ctx) {
     let sidOld = null;
     let sidNew = null;
 
-    if (type === "insert" || type === "update") {
-        sidOld = op.id || ownerOld?.getAttribute("id") || null;
+    if (type === "insert") {
+        sidOld = null;
         sidNew = op.id || ownerNew?.getAttribute("id") || null;
-    } else {
+    } else if (type === "update") {
         sidOld = ownerOld?.getAttribute("id") || op.id || null;
-        sidNew = ownerNew?.getAttribute("id") || null;
+        sidNew = ownerNew?.getAttribute("id") || op.id || null;
+    } else {
+        sidOld =
+            ownerOld?.getAttribute("id") ||
+            ownerOldDynamic?.getAttribute?.("id") ||
+            op.id ||
+            null;
+
+        sidNew = ownerNew?.getAttribute("id") || sidOld || null;
     }
 
     if (type === "update") {

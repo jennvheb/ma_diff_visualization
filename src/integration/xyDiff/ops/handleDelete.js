@@ -5,7 +5,7 @@ import {
     resolveOldPathByDeletePayload
 } from "./opUtils.js";
 import {firstXmId, normalizeXmKey, resolveRelPathByXidForMove, xidElTag} from "../xid/resolveByXid.js";
-import {NON_STRUCTURAL_MOVE_TAGS} from "../../tags.js";
+import {DIFF_BOUNDARY_TAGS, NON_STRUCTURAL_MOVE_TAGS} from "../../tags.js";
 import {
     resolveDrawableOwnerRelPathByParPos,
     resolveMoveObjectRelByParPos,

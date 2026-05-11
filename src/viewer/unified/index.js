@@ -1,14 +1,209 @@
-import {stampLogicalIds, nearestDrawable, firstKRealTaskIds, gatewayStructureSig} from "../../integration/stableIds.js";
+import {
+    stampLogicalIds,
+    nearestDrawable,
+    firstKRealTaskIds,
+    gatewayStructureSig,
+    tagName
+} from "../../integration/stableIds.js";
 import {getDescRoot, renderUnifiedXml} from "./render.js";
 import {normalizeOp, attachUpdateContent, mergeMoveAndUpdateOps} from "./normalizeOps.js";
-import {collectDrawableIdsXML} from "./xml.js";
+import {collectDrawableIdsXML, recoverById} from "./xml.js";
 import {isStrictAncestorPath} from "./paths.js";
-import {toSegs} from "./config.js";
+import {lastSeg, parentPath, toSegs} from "./config.js";
 import {insertGhost} from "./placement.js";
 import {buildIdIndex, colorizeUnified} from "./colorize.js";
 import {buildOpsByIdDirect, buildOpsByIdRegion, buildOpsByKey, installUnifiedClickHandler} from "./clicks.js";
 import {installUndoController} from "./undo/undoController.js";
 import {installMockHostUndo} from "./mockHostUndo.js";
+import { indexPathForNodeRelative } from "../../integration/xyDiff/dom/pathUtils.js";
+function isSameOrDescendantPath(path, ancestor) {
+    if (!path || !ancestor) return false;
+    return path === ancestor || path.startsWith(ancestor + "/");
+}
+
+function isPrefixPath(path, prefix) {
+    return path === prefix || path.startsWith(prefix + "/");
+}
+
+function shiftPathAfterInsert(path, insertPath) {
+    if (!path || !insertPath) return path;
+
+    const p = path.split("/").filter(Boolean).map(Number);
+    const i = insertPath.split("/").filter(Boolean).map(Number);
+
+    if (p.length !== i.length) return path;
+
+    const sameParent = p.slice(0, -1).join("/") === i.slice(0, -1).join("/");
+    if (!sameParent) return path;
+
+    if (p[p.length - 1] >= i[i.length - 1]) {
+        p[p.length - 1]++;
+    }
+
+    return "/" + p.join("/");
+}
+
+function shiftPathAfterRemoval(path, removedPath) {
+    if (!path || !removedPath) return path;
+
+    // If the path is inside the removed subtree, no valid slot remains.
+    if (isPrefixPath(path, removedPath)) return path;
+
+    const p = path.split("/").filter(Boolean).map(Number);
+    const r = removedPath.split("/").filter(Boolean).map(Number);
+
+    if (p.length !== r.length) return path;
+
+    const sameParent = p.slice(0, -1).join("/") === r.slice(0, -1).join("/");
+    if (!sameParent) return path;
+
+    if (p[p.length - 1] > r[r.length - 1]) {
+        p[p.length - 1]--;
+    }
+
+    return "/" + p.join("/");
+}
+
+function ghostSourcePathAtDeltaTime(op, ctx) {
+    let p = op.rebasedOldPath || op.oldPath;
+    const myIdx = op.deltaIndex ?? Infinity;
+
+    for (const other of ctx.ops || []) {
+        const otherIdx = other.deltaIndex ?? Infinity;
+        if (otherIdx >= myIdx) continue;
+
+        if (other.type === "insert") {
+            p = shiftPathAfterInsert(p, other.rebasedNewPath || other.newPath);
+        }
+
+        if (
+            other.type === "delete" ||
+            other.type === "move" ||
+            other.type === "moveupdate"
+        ) {
+            p = shiftPathAfterRemoval(p, other.rebasedOldPath || other.oldPath);
+        }
+    }
+
+    return p;
+}
+
+function isCoveredByDeletedSubtree(oldPath, metaOps) {
+    return metaOps.some(op => {
+        if (op.type !== "delete") return false;
+
+        const deletePath = op.rebasedOldPath || op.oldPath;
+        return isSameOrDescendantPath(oldPath, deletePath);
+    });
+}
+
+function isCoveredByExplicitMove(oldPath, metaOps) {
+    return metaOps.some(op => {
+        if (op.type !== "move" && op.type !== "moveupdate") return false;
+
+        // synthetic recovered moves should not suppress other candidates
+        if (op.recoveredFromStableId) return false;
+
+        const movePath = op.rebasedOldPath || op.oldPath;
+        return isSameOrDescendantPath(oldPath, movePath);
+    });
+}
+function recoverStableIdMovesForCpeeDiff(metaOps, oldRoot, newRoot, isXy) {
+    if (isXy) return metaOps;
+
+    const explicitMoves = metaOps.filter(op =>
+        (op.type === "move" || op.type === "moveupdate") &&
+        !op.recoveredFromStableId
+    );
+
+    if (!explicitMoves.length) {
+        console.log("skip stable-id move recovery: diff contains no explicit moves");
+        return metaOps;
+    }
+
+    const existingMoveIds = new Set(
+        explicitMoves
+            .map(op => op.sidOld)
+            .filter(Boolean)
+    );
+
+    const deletedSelfIds = new Set(
+        metaOps
+            .filter(op => op.type === "delete")
+            .map(op => op.sidOld)
+            .filter(Boolean)
+    );
+
+    const insertedIds = new Set(
+        metaOps
+            .filter(op => op.type === "insert")
+            .map(op => op.sidNew)
+            .filter(Boolean)
+    );
+
+    const stableMoves = [];
+
+    /*
+     * IMPORTANT:
+     * Do NOT scan the whole tree.
+     *
+     * Only recover stable-id moves inside explicit move regions.
+     * Otherwise every path shift after a gateway/delete restructuring becomes
+     * a fake move.
+     */
+    for (const moveOp of explicitMoves) {
+        const oldMoveRoot = moveOp.ownerOld;
+        const newMoveRoot = moveOp.ownerNew;
+
+        if (!oldMoveRoot || !newMoveRoot) continue;
+
+        const oldCandidates = Array.from(oldMoveRoot.getElementsByTagName("*"));
+
+        for (const oldEl of oldCandidates) {
+            const id = oldEl.getAttribute?.("id");
+            if (!id || id.startsWith("__gw_")) continue;
+            if (existingMoveIds.has(id)) continue;
+            if (deletedSelfIds.has(id)) continue;
+            if (insertedIds.has(id)) continue;
+
+            const newEl = recoverById(newMoveRoot, id);
+            if (!newEl) continue;
+
+            const oldPath = indexPathForNodeRelative(oldRoot, oldEl);
+            const newPath = indexPathForNodeRelative(newRoot, newEl);
+
+            if (!oldPath || !newPath || oldPath === newPath) continue;
+
+            stableMoves.push({
+                type: "move",
+                oldPath,
+                newPath,
+                rebasedOldPath: oldPath,
+                rebasedNewPath: newPath,
+                ownerOld: nearestDrawable(oldEl),
+                ownerOldDynamic: null,
+                ownerNew: nearestDrawable(newEl),
+                sidOld: id,
+                sidNew: id,
+                mergeOwnerId: id,
+                mergeOwnerPath: oldPath,
+                oldNodeStatic: oldEl,
+                oldNodeTag: tagName(oldEl),
+                selfOldIsDrawable: true,
+                selfOldId: id,
+                subtreeIdsOld: collectDrawableIdsXML(oldEl),
+                subtreeIdsNew: collectDrawableIdsXML(newEl),
+                contentOld: null,
+                contentNew: null,
+                contentDiff: null,
+                changeOccured: false,
+                recoveredFromStableId: true
+            });
+        }
+    }
+
+    return [...metaOps, ...stableMoves];
+}
 
 function logSampleOps(metaOps) {
     const insertOp = metaOps.find(op => op.type === "insert");
@@ -23,7 +218,37 @@ function logSampleOps(metaOps) {
     if (deleteOp) console.log("sample delete op json", JSON.stringify(deleteOp, null, 2));
     if (updateOp) console.log("sample update op json", JSON.stringify(updateOp, null, 2));
 }
+function dropCpeeDiffGatewayMoveNoise(metaOps, isXy) {
+    if (isXy) return metaOps;
 
+    return metaOps.filter(op => {
+        if (op.type !== "move" && op.type !== "moveupdate") return true;
+
+        const sid = String(op.sidOld || op.sidNew || "");
+        const tag = String(op.oldNodeTag || "");
+
+        const isSyntheticGatewayMove =
+            sid.startsWith("__gw_") ||
+            tag === "choose" ||
+            tag === "parallel_branch" ||
+            tag === "alternative" ||
+            tag === "otherwise";
+
+        if (isSyntheticGatewayMove) {
+            console.warn("DROP CPEEDIFF GATEWAY MOVE NOISE", {
+                sid,
+                tag,
+                oldPath: op.oldPath,
+                rebasedOldPath: op.rebasedOldPath,
+                newPath: op.newPath,
+                rebasedNewPath: op.rebasedNewPath
+            });
+            return false;
+        }
+
+        return true;
+    });
+}
 function clearUnifiedCanvas() {
     const graph = document.getElementById("graph-new");
     if (graph) {
@@ -144,6 +369,7 @@ function buildMetaOps({ oldRoot, newRoot, diffOps, isXy }) {
 
         return {
             ...base,
+            deltaIndex: idx,
             subtreeIdsOld,
             subtreeIdsNew,
             contentOld,
@@ -157,19 +383,41 @@ function buildMetaOps({ oldRoot, newRoot, diffOps, isXy }) {
     });
 
     metaOps = mergeMoveAndUpdateOps(metaOps);
+
+    metaOps = dropCpeeDiffGatewayMoveNoise(metaOps, isXy);
+    metaOps = recoverStableIdMovesForCpeeDiff(metaOps, oldRoot, newRoot, isXy);
     metaOps = suppressNestedMoveOps(metaOps);
+    if (!isXy) {
+        metaOps = metaOps.filter(op => {
+            if (op.type !== "move" && op.type !== "moveupdate") return true;
+
+            const oldP = op.rebasedOldPath || op.oldPath;
+            const newP = op.rebasedNewPath || op.newPath;
+
+            // only index changed inside same parent = shift, not visual move
+            if (oldP && newP && parentPath(oldP) === parentPath(newP)) {
+                console.warn("drop same parent move", {
+                    sidOld: op.sidOld,
+                    oldP,
+                    newP
+                });
+                return false;
+            }
+
+            return true;
+        });
+    }
     const chooseOps = metaOps.filter(op =>
         (op.type === "update" || op.type === "moveupdate") &&
         String(op.sidOld || op.sidNew || "").includes("__gw_choose__")
     );
 
-    console.log("choose ops after mergeMoveAndUpdateOps", JSON.stringify(chooseOps, null, 2));
+    console.log("choose ops after mergemoveandupdateops", JSON.stringify(chooseOps, null, 2));
 
     const insertedNewIds = new Set();
     for (const op of metaOps) {
         if (op.type !== "insert") continue;
         if (op.sidNew) insertedNewIds.add(op.sidNew);
-        for (const id of op.subtreeIdsNew || []) insertedNewIds.add(id);
     }
 
     const movedOldIds = new Set();
@@ -241,6 +489,7 @@ function buildUnifiedRoot({ newRoot, metaOps, baseCtx, movedOldIds, deletedOldId
         ...baseCtx,
         movedOldIds,
         deletedOldIds,
+        ops: metaOps,
     };
 
     const unifiedRoot = newRoot.cloneNode(true);
@@ -286,14 +535,15 @@ function buildUnifiedRoot({ newRoot, metaOps, baseCtx, movedOldIds, deletedOldId
         ghostOps = [...ghostOps].sort((a, b) => {
             const pa = ghostOldPath(a);
             const pb = ghostOldPath(b);
-            const d = cmpPathLex(pa, pb);
-            if (d !== 0) return d;
 
-            const pr = (t) => (t === "delete" ? 0 : 1);
-            const td = pr(a.type) - pr(b.type);
-            if (td !== 0) return td;
+            const parentA = parentPath(pa);
+            const parentB = parentPath(pb);
 
-            return 0;
+            if (parentA === parentB) {
+                return lastSeg(pa) - lastSeg(pb);
+            }
+
+            return cmpPathLex(pa, pb);
         });
 
         for (const op of ghostOps) {
@@ -308,10 +558,40 @@ function buildUnifiedRoot({ newRoot, metaOps, baseCtx, movedOldIds, deletedOldId
             if (op.type !== "move" && op.type !== "moveupdate") continue;
             if (op._insertedThenMoved) continue;
             if (op._coveredByAncestorMoveGhost) continue;
-            if (!op.ownerOld) continue;
-            if (op.sidOld && deletedOldIds.has(op.sidOld)) continue;
+            if (!op.ownerOld && !op.ownerOldDynamic) continue;
 
-            insertGhost(op, unifiedRoot, placementCtx, { ghostKind: "move", skipSameIdAnchor: true });
+            const moveOldPath = op.rebasedOldPath || op.oldPath;
+
+            const sourceCoveredByDeleteGhost = metaOps.some(d => {
+                if (d.type !== "delete") return false;
+
+                const deletePath = d.rebasedOldPath || d.oldPath;
+                if (!deletePath || !moveOldPath) return false;
+
+                return isSameOrDescendantPath(moveOldPath, deletePath);
+            });
+
+            if (sourceCoveredByDeleteGhost) {
+                console.warn("skip move ghost - source already in delete ghost", {
+                    sidOld: op.sidOld,
+                    moveOldPath
+                });
+                continue;
+            }
+
+            const explicitlyDeletedSameNode = metaOps.some(d =>
+                d.type === "delete" &&
+                d.sidOld &&
+                op.sidOld &&
+                d.sidOld === op.sidOld
+            );
+
+            if (explicitlyDeletedSameNode) continue;
+
+            insertGhost(op, unifiedRoot, placementCtx, {
+                ghostKind: "move",
+                skipSameIdAnchor: true
+            });
         }
 
         for (const op of deleteOps) {

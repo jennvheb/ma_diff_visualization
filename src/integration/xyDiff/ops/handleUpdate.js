@@ -6,13 +6,57 @@ import {childElements, nearestElementNode} from "../dom/domUtils.js";
 import {firstXmId, joinIndexPath} from "../xid/resolveByXid.js";
 import {elementIndexForDomPos} from "../xid/resolveByParPos.js";
 
-
+function isReplacementXid(state, xid) {
+    return !!xid && state.replacementByXid?.has(String(xid));
+}
 export function handleAttributeUpdate(edit, ctx, state) {
     const { baseOld, oldXidIndex, newDrawablesById } = ctx;
 
 
     const attr = edit.getAttribute("a") || "";
     const xid = edit.getAttribute("xid") || "";
+
+    if (isReplacementXid(state, xid)) {
+        const repl = state.replacementByXid.get(String(xid));
+
+        const oldEl = repl.oldId
+            ? ctx.oldDrawablesById?.get?.(String(repl.oldId)) || null
+            : null;
+
+        const newEl = repl.newId
+            ? ctx.newDrawablesById?.get?.(String(repl.newId)) || null
+            : null;
+
+        const oldPath = oldEl ? indexPathForNodeRelative(ctx.baseOld, oldEl) : null;
+        const newPath = newEl ? indexPathForNodeRelative(ctx.baseNew, newEl) : null;
+
+        const already = state.operations.some(o =>
+            o.kind === "delete" &&
+            o.oldPath === oldPath &&
+            o.meta?.replacementXid === String(xid)
+        );
+
+        if (!already && oldPath && newPath) {
+
+            state.operations.push({
+                kind: "delete",
+                oldPath,
+                meta: { replacementXid: String(xid), replacedBy: repl.newId }
+            });
+
+            const newEl = elementByRelIndexPath(ctx.baseNew, newPath);
+            const payload = newEl ? ctx.serializer.serializeToString(newEl) : null;
+
+            state.operations.push({
+                kind: "insert",
+                newPath,
+                payload,
+                replacementForOldPath: oldPath
+            });
+        }
+
+        return;
+    }
 
     if (attr === "id") return;
 

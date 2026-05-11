@@ -49,12 +49,14 @@ export async function computeDiffState({
         const differ = new CpeeDiff();
         const editScript = differ.diff(oldTree, newTree);
 
+        const rawDiffXml = editScript.toXmlString();
+
         return {
             oldTreeXml: oldTree.toXmlString(),
             newTreeXml: newTree.toXmlString(),
             diffSource: "cpeediff",
-            diffOps: editScriptToOps(editScript),
-            rawDiffXml: editScript.toXmlString()
+            diffOps: editScriptToOps(editScript, rawDiffXml),
+            rawDiffXml
         };
     }
 

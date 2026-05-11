@@ -154,7 +154,9 @@ export function isMeaningfulUpdate(contentOld, contentNew) {
         d.notesChanged ||
         //    d.customizationChanged ||
         //    d.annotationsChanged ||
-        d.attrChanges?.some?.(x => x.key === "endpoint") || false;
+        d.attrChanges?.some?.(x =>
+            ["endpoint", "label", "method"].includes(x.key)
+        ) || false;
     // If *only* label/endpoint/method:
     // const taskChanged = d.labelChanged || d.endpointChanged;
 

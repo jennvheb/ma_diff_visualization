@@ -34,10 +34,41 @@ export function loadXidMapExpr(filePath) {
     return parseXidMapExpr(head.trim());
 }
 
+function buildPostorderNodesForXidMap(doc) {
+    const out = [];
+
+    const isWhitespaceText = (n) =>
+        n && n.nodeType === 3 && String(n.nodeValue || "").trim() === "";
+
+    function visit(node) {
+        if (!node) return;
+
+        if (node.nodeType === 1) {
+            for (let i = 0; i < node.childNodes.length; i++) {
+                const c = node.childNodes[i];
+                if (c.nodeType === 1) {
+                    visit(c);
+                } else if (c.nodeType === 3 && !isWhitespaceText(c)) {
+                    out.push(c);
+                }
+            }
+            out.push(node);
+            return;
+        }
+
+        if (node.nodeType === 3 && !isWhitespaceText(node)) {
+            out.push(node);
+        }
+    }
+
+    if (doc?.documentElement) visit(doc.documentElement);
+    return out;
+}
+
 export function buildXidIndexFromXidMap(doc, xidmapExpr) {
     if (!doc?.documentElement || !xidmapExpr?.seq) return null;
 
-    const nodes = collectNodesPostorder(doc);
+    const nodes = buildPostorderNodesForXidMap(doc);
     const seq = xidmapExpr.seq;
 
     if (seq.length < nodes.length) {

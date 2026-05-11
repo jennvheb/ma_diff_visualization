@@ -34,7 +34,18 @@ export function resolveRelPathByXidForMove(xidIndex, baseElem, xmId) {
     const owner = nearestDrawableAncestor(raw);
     if (!owner) return null;
 
-    return indexPathForNodeRelative(baseElem, owner);
+    const rel = indexPathForNodeRelative(baseElem, owner);
+
+    console.error("RESOLVE MOVE BY XID", {
+        xmId,
+        rawTag: raw.localName || raw.tagName || null,
+        rawId: raw.getAttribute?.("id") || null,
+        ownerTag: owner.localName || owner.tagName || null,
+        ownerId: owner.getAttribute?.("id") || null,
+        rel
+    });
+
+    return rel;
 }
 
 export function resolveRelPathByXid(xidIndex, baseElem, xid, { snapIfNotDrawable = true } = {}) {

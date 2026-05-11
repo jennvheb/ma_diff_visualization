@@ -4,6 +4,13 @@ function normalizeRoot(pathStr) {
     return pathStr;
 }
 
+function indentXml(xml, prefix = "  ") {
+    return String(xml || "")
+        .split(/\r?\n/)
+        .map(line => line.trim() ? prefix + line : line)
+        .join("\n");
+}
+
 export function emitDeltaXml(operationsClean, baseOld, elementByRelIndexPath) {
     console.error("DELTA OPS:", operationsClean.map(o => ({
         kind: o.kind,
@@ -15,9 +22,14 @@ export function emitDeltaXml(operationsClean, baseOld, elementByRelIndexPath) {
 
     for (const op of operationsClean) {
         if (op.kind === "insert") {
-            if (!op.payload) continue;
-            const np = normalizeRoot(op.newPath);
-            deltaXml += `  <insert newPath="${np}">\n    ${op.payload}\n  </insert>\n`;
+            if (!op.payload) {
+                console.error("skip insert because no payload", op);
+                continue;
+            }
+
+            deltaXml += `  <insert newPath="${escapeXmlAttr(op.newPath)}">\n`;
+            deltaXml += indentXml(op.payload, "    ") + "\n";
+            deltaXml += `  </insert>\n`;
         } else if (op.kind === "delete") {
             const rawOld = normalizeRoot(op.oldPath);
             deltaXml += `  <delete oldPath="${rawOld}"/>\n`;

@@ -88,40 +88,38 @@ export class EndpointAnchorMatcher {
                 continue;
             }
 
-            // Step 2: ambiguous tag+endpoint bucket -> try label
-            const oldByLabel = groupByLabel(olds);
-            const newByLabel = groupByLabel(news);
+            // Step 2: ambiguous tag+endpoint bucket -> try id FIRST
+            const oldById = groupById(olds);
+            const newById = groupById(news);
+
+            for (const [idKey, Oid] of oldById.entries()) {
+                const Nid = newById.get(idKey);
+                if (!Nid || !Oid.length || !Nid.length) continue;
+
+                if (Oid.length === 1 && Nid.length === 1) {
+                    const o = Oid[0], n = Nid[0];
+                    if (!matching.isMatched(o) && !matching.isMatched(n)) {
+                        matching.matchNew(n, o);
+                    }
+                }
+            }
+
+            // Step 3: remaining ambiguous tag+endpoint bucket -> try label
+            const oldRemaining = olds.filter(o => !matching.isMatched(o));
+            const newRemaining = news.filter(n => !matching.isMatched(n));
+
+            const oldByLabel = groupByLabel(oldRemaining);
+            const newByLabel = groupByLabel(newRemaining);
 
             for (const [labelKey, Olabel] of oldByLabel.entries()) {
                 const Nlabel = newByLabel.get(labelKey);
                 if (!Nlabel || !Olabel.length || !Nlabel.length) continue;
 
-                // label resolved ambiguity uniquely
                 if (Olabel.length === 1 && Nlabel.length === 1) {
                     const o = Olabel[0], n = Nlabel[0];
                     if (!matching.isMatched(o) && !matching.isMatched(n)) {
                         matching.matchNew(n, o);
                     }
-                    continue;
-                }
-
-                // Step 3: still ambiguous inside same endpoint+label bucket -> try id
-                const oldById = groupById(Olabel);
-                const newById = groupById(Nlabel);
-
-                for (const [idKey, Oid] of oldById.entries()) {
-                    const Nid = newById.get(idKey);
-                    if (!Nid || !Oid.length || !Nid.length) continue;
-
-                    // id resolved ambiguity uniquely
-                    if (Oid.length === 1 && Nid.length === 1) {
-                        const o = Oid[0], n = Nid[0];
-                        if (!matching.isMatched(o) && !matching.isMatched(n)) {
-                            matching.matchNew(n, o);
-                        }
-                    }
-
-                    // else still ambiguous -> fall through
                 }
 
                 // any remaining ambiguous nodes fall through

@@ -61,38 +61,38 @@ export class LabelAnchorMatcher {
                 continue;
             }
 
-            // ambiguous tag+label bucket: try to resolve by real endpoint
-            const Oep = groupByEndpoint(olds);
-            const Nep = groupByEndpoint(news);
+            // ambiguous tag+label bucket: try id FIRST
+            const Oid = groupById(olds);
+            const Nid = groupById(news);
+
+            for (const [id, oIdNodes] of Oid.entries()) {
+                const nIdNodes = Nid.get(id);
+                if (!nIdNodes || !oIdNodes.length || !nIdNodes.length) continue;
+
+                if (oIdNodes.length === 1 && nIdNodes.length === 1) {
+                    const o = oIdNodes[0], n = nIdNodes[0];
+                    if (!matching.isMatched(o) && !matching.isMatched(n)) {
+                        matching.matchNew(n, o);
+                    }
+                }
+            }
+
+            // then endpoint for remaining unmatched nodes
+            const oldRemaining = olds.filter(o => !matching.isMatched(o));
+            const newRemaining = news.filter(n => !matching.isMatched(n));
+
+            const Oep = groupByEndpoint(oldRemaining);
+            const Nep = groupByEndpoint(newRemaining);
 
             for (const [ep, oNodes] of Oep.entries()) {
                 const nNodes = Nep.get(ep);
                 if (!nNodes || !oNodes.length || !nNodes.length) continue;
 
-                // only resolve ambiguity when endpoint itself becomes unique
                 if (oNodes.length === 1 && nNodes.length === 1) {
                     const o = oNodes[0], n = nNodes[0];
                     if (!matching.isMatched(o) && !matching.isMatched(n)) {
                         matching.matchNew(n, o);
                     }
-                    continue;
-                }
-
-                const Oid = groupById(oNodes);
-                const Nid = groupById(nNodes);
-
-                for (const [id, oIdNodes] of Oid.entries()) {
-                    const nIdNodes = Nid.get(id);
-                    if (!nIdNodes || !oIdNodes.length || !nIdNodes.length) continue;
-
-                    // id resolved ambiguity uniquely
-                    if (oIdNodes.length === 1 && nIdNodes.length === 1) {
-                        const o = oIdNodes[0], n = nIdNodes[0];
-                        if (!matching.isMatched(o) && !matching.isMatched(n)) {
-                            matching.matchNew(n, o);
-                        }
-                    }
-                    // else still ambiguous -> fall through
                 }
                 // remaining ambiguous nodes in this endpoint bucket fall through
             }
