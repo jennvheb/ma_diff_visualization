@@ -24,6 +24,13 @@ function isSameOrDescendantPath(path, ancestor) {
 function isPrefixPath(path, prefix) {
     return path === prefix || path.startsWith(prefix + "/");
 }
+function opKey(op) {
+    const oldP = op.rebasedOldPath || op.oldPath || "";
+    const newP = op.rebasedNewPath || op.newPath || "";
+    const id = op.sidOld || op.sidNew || op.selfOldId || op.id || "";
+
+    return `${op.type}|${id}|${oldP}|${newP}`;
+}
 
 function shiftPathAfterInsert(path, insertPath) {
     if (!path || !insertPath) return path;
@@ -631,7 +638,7 @@ export function renderUnifiedApp({
 
     const rawOps = Array.isArray(diffOps) ? diffOps : [];
 
-    const {
+    let {
         metaOps,
         baseCtx,
         movedOldIds,
@@ -643,8 +650,16 @@ export function renderUnifiedApp({
         isXy
     });
 
+    metaOps = metaOps.map(op => ({
+        ...op,
+        opKey: op.opKey || opKey(op),
+        undoKey: op.undoKey || opKey(op)
+    }));
+
     logSampleOps(metaOps);
+
     window.__META_OPS__ = metaOps;
+    window.ALL_DIFF_OPS = metaOps;
 
     const unifiedRoot = buildUnifiedRoot({
         newRoot,
@@ -654,6 +669,8 @@ export function renderUnifiedApp({
         deletedOldIds,
         isXy
     });
+
+    window.__UNIFIED_ROOT__ = unifiedRoot;
 
     const opsByIdDirect = buildOpsByIdDirect(metaOps);
     const opsByIdRegion = buildOpsByIdRegion(metaOps);

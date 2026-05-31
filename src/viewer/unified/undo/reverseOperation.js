@@ -17,6 +17,21 @@ function allElementsWithId(root) {
     return Array.from(root.querySelectorAll?.("*[id]") || []);
 }
 
+function resolveClosestExistingAncestor(root, path) {
+    if (!root || !path) return null;
+
+    const segs = String(path).split("/").filter(Boolean);
+
+    while (segs.length) {
+        const candidate = "/" + segs.join("/");
+        const el = resolveElementByNumericPath(root, candidate);
+        if (el) return el;
+        segs.pop();
+    }
+
+    return root;
+}
+
 function pruneCloneDescendantsAlreadyPresent(cloneRoot, currentNewRoot) {
     if (!cloneRoot || !currentNewRoot) return;
 
@@ -208,6 +223,14 @@ function reverseMove({ baselineOldXml, currentNewXml, op }) {
         );
     }
 
+    const sourceOldReal = findRealNodeByLookupNode(oldRoot, oldLookup, sourceOldLookup);
+
+    if (!sourceOldReal) {
+        throw new Error(
+            `reverseMove: could not map old source node to real OLD tree (${op.sidOld || op.rebasedOldPath || op.oldPath})`
+        );
+    }
+
     const targetNewLookup = resolveNodeRobust(newLookup, {
         realId: op.id || op.selfOldId,
         sid: op.sidNew || op.sidOld,
@@ -234,77 +257,78 @@ function reverseMove({ baselineOldXml, currentNewXml, op }) {
         throw new Error("reverseMove: old parent missing");
     }
 
-    if (!targetNewReal.parentNode) {
-        throw new Error("reverseMove: target node has no parent");
+    const restored = cloneIntoDoc(sourceOldReal, newDoc);
+
+    // remove current moved node first
+    if (targetNewReal.parentNode) {
+        targetNewReal.parentNode.removeChild(targetNewReal);
     }
+    if (op.realizeParentPath) {
+        const parent = resolveElementByNumericPath(newRoot, op.realizeParentPath);
 
-    const targetNewId = targetNewReal.getAttribute?.("id") || op.sidNew || op.sidOld || null;
+        if (parent) {
+            const before = op.realizeBeforeId
+                ? findElementByIdAnywhere(parent, op.realizeBeforeId)
+                : null;
 
-    const subtreeSize = (op.subtreeIdsOld || []).length;
-    const preferExactIndex = subtreeSize > 1;
+            const after = op.realizeAfterId
+                ? findElementByIdAnywhere(parent, op.realizeAfterId)
+                : null;
 
-    // always compute both options
+            if (before && before.parentNode === parent) {
+                parent.insertBefore(restored, before);
+                return serializeXml(newDoc);
+            }
+
+            if (after && after.parentNode === parent) {
+                if (after.nextSibling) parent.insertBefore(restored, after.nextSibling);
+                else parent.appendChild(restored);
+                return serializeXml(newDoc);
+            }
+
+            insertElementAt(parent, restored, op.realizeIndex);
+            return serializeXml(newDoc);
+        }
+    }    // place restored clone by OLD sibling anchors
+    const newLookupAfterRemoval = newRoot.cloneNode(true);
+    stampLogicalIds(newLookupAfterRemoval);
+
     const anchor = findAnchorByOldSiblingsExcludingSelf(
         oldParentLookup,
         sourceOldLookup,
-        newLookup,
+        newLookupAfterRemoval,
         newRoot,
-        targetNewId
+        op.sidOld || op.sidNew || op.selfOldId || null
     );
 
-    const oldParentLookupPath = indexPathFromAncestor(oldLookup, oldParentLookup);
-    const targetParentReal =
-        oldParentLookupPath ? resolveElementByNumericPath(newRoot, oldParentLookupPath) : null;
-
-    const oldSiblings = childElements(oldParentLookup);
-    const oldIndex0 = oldSiblings.indexOf(sourceOldLookup);
-
-    console.log("reverseMove placement strategy", {
-        sidOld: op.sidOld || null,
-        sidNew: op.sidNew || null,
-        subtreeSize,
-        preferExactIndex,
-        oldParentLookupPath,
-        oldIndex0,
-        anchor: anchor ? {
-            mode: anchor.mode,
-            refId: anchor.ref?.getAttribute?.("id") || null,
-            parentId: anchor.parent?.getAttribute?.("id") || null,
-            parentTag: anchor.parent?.tagName || null
-        } : null
-    });
-
-    // detach first
-    targetNewReal.parentNode.removeChild(targetNewReal);
-
-    // subtree/container move => exact old index first
-    if (preferExactIndex && targetParentReal && oldIndex0 >= 0) {
-        insertElementAt(targetParentReal, targetNewReal, oldIndex0 + 1);
-        return serializeXml(newDoc);
-    }
-
-    // strategy 2: leaf/simple move => sibling anchor first
     if (anchor?.mode === "before" && anchor.ref && anchor.parent) {
-        anchor.parent.insertBefore(targetNewReal, anchor.ref);
+        anchor.parent.insertBefore(restored, anchor.ref);
         return serializeXml(newDoc);
     }
 
     if (anchor?.mode === "after" && anchor.ref && anchor.parent) {
         if (anchor.ref.nextSibling) {
-            anchor.parent.insertBefore(targetNewReal, anchor.ref.nextSibling);
+            anchor.parent.insertBefore(restored, anchor.ref.nextSibling);
         } else {
-            anchor.parent.appendChild(targetNewReal);
+            anchor.parent.appendChild(restored);
         }
         return serializeXml(newDoc);
     }
 
-    // fallback: exact old index if available
-    if (targetParentReal && oldIndex0 >= 0) {
-        insertElementAt(targetParentReal, targetNewReal, oldIndex0 + 1);
-        return serializeXml(newDoc);
+    // fallback: old parent path, then closest existing ancestor
+    const oldParentPath = indexPathFromAncestor(oldLookup, oldParentLookup);
+    let targetParent =
+        oldParentPath ? resolveElementByNumericPath(newRoot, oldParentPath) : null;
+
+    if (!targetParent) {
+        targetParent = resolveClosestExistingAncestor(newRoot, oldParentPath);
     }
 
-    throw new Error("reverseMove: could not place moved node");
+
+    const oldIndex = childElements(oldParentLookup).indexOf(sourceOldLookup);
+    insertElementAt(targetParent, restored, (oldIndex >= 0 ? oldIndex : 0) + 1);
+
+    return serializeXml(newDoc);
 }
 
 function elementChildren(node) {
@@ -401,6 +425,24 @@ function reverseDelete({ baselineOldXml, currentNewXml, op }) {
     const clone = cloneIntoDoc(sourceOldReal, newDoc);
     pruneCloneDescendantsAlreadyPresent(clone, newRoot);
 
+    if (op.realizeParentPath && Number.isInteger(op.realizeIndex)) {
+        const parent = resolveElementByNumericPath(newRoot, op.realizeParentPath);
+
+        console.log("[reverseDelete realize slot]", {
+            parentPath: op.realizeParentPath,
+            realizeIndex: op.realizeIndex,
+            parentTag: parent?.tagName,
+            childIds: Array.from(parent?.children || []).map(
+                c => c.getAttribute("id") || c.tagName
+            )
+        });
+
+        if (parent) {
+            insertElementAt(parent, clone, op.realizeIndex);
+            return serializeXml(newDoc);
+        }
+    }
+
     console.log("[reverseDelete] op", op);
     console.log("[reverseDelete] sourceOld tag/id",
         sourceOldReal?.tagName,
@@ -434,16 +476,60 @@ function reverseDelete({ baselineOldXml, currentNewXml, op }) {
         return serializeXml(newDoc);
     }
 
-    // fallback: map old parent lookup to real NEW by derived path
-    const oldParentRealPath = indexPathFromAncestor(oldLookup, oldParentLookup);
-    const targetParent =
-        oldParentRealPath ? resolveElementByNumericPath(newRoot, oldParentRealPath) : newRoot;
+    if (op.realizeReplacesPath) {
+        const parentPath = getParentPath(op.realizeReplacesPath);
+        const index = getLastPathIndex(op.realizeReplacesPath);
+        const parent = parentPath ? resolveElementByNumericPath(newRoot, parentPath) : null;
 
-    if (!targetParent) {
-        throw new Error("reverseDelete: could not resolve fallback target parent in NEW");
+        console.log("[reverseDelete replace slot]", {
+            realizeReplacesPath: op.realizeReplacesPath,
+            parentPath,
+            index,
+            parentTag: parent?.tagName,
+            childIds: Array.from(parent?.children || []).map(
+                c => c.getAttribute("id") || c.tagName
+            )
+        });
+
+        if (parent && Number.isInteger(index)) {
+            const kids = Array.from(parent.children || []);
+            const ref = kids[index] || null;
+
+            if (ref) parent.insertBefore(clone, ref);
+            else parent.appendChild(clone);
+            return serializeXml(newDoc);
+        }
     }
 
-    targetParent.appendChild(clone);
+
+    // fallback: restore under closest surviving ancestor
+    const oldParentRealPath = indexPathFromAncestor(oldLookup, oldParentLookup);
+
+    let targetParent =
+        oldParentRealPath
+            ? resolveElementByNumericPath(newRoot, oldParentRealPath)
+            : null;
+
+    if (!targetParent) {
+        targetParent = resolveClosestExistingAncestor(
+            newRoot,
+            oldParentRealPath
+        );
+    }
+
+    if (!targetParent) {
+        targetParent = newRoot;
+    }
+
+    const oldKids = childElements(oldParentLookup);
+    const sourceIndex = oldKids.indexOf(sourceOldLookup);
+
+    insertElementAt(
+        targetParent,
+        clone,
+        (sourceIndex >= 0 ? sourceIndex : 0) + 1
+    );
+
     return serializeXml(newDoc);
 }
 

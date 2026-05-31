@@ -16,8 +16,8 @@ const __dirname = path.dirname(__filename);
 
 const ALGO = (args.get("algo") ?? "cpeediff").toLowerCase();
 
-const OLD = args.get("old") ?? "../viewer/testset/visualize_one_premove.xml";
-const NEW = args.get("new") ?? "../viewer/testset/visualize_one_2ins_1del_1mov.xml";
+const OLD = args.get("old") ?? "../viewer/testset/visualize_one_og.xml";
+const NEW = args.get("new") ?? "../viewer/testset/visualize_one_og_gwupdate.xml";
 
 const rawPassthrough =
     (args.get("raw") ?? "").toLowerCase() === "true" || args.has("raw");
@@ -54,7 +54,7 @@ window.DIFF = ${JSON.stringify(diffOps ?? [])};
 window.RAW_DIFF_XML = ${JSON.stringify(rawDiffXml)};
 `;
 
-    fs.writeFileSync(path.resolve(__dirname, "diff_data.js"), out, "utf8");
+    fs.writeFileSync(path.resolve(__dirname, "../viewer/diff_data.js"), out, "utf8");
 }
 
 (async () => {

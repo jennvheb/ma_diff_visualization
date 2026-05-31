@@ -51,6 +51,9 @@ function placeMoveGhostAtOldSourceSlot(op, unifiedRoot, ctx, ghost) {
         ghostId: ghost.getAttribute("id")
     });
 
+    op.realizeParentPath = indexPathForNodeRelative(unifiedRoot, container);
+    op.realizeIndex = elementChildrenOnly(container).indexOf(ghost);
+
     return true;
 }
 
@@ -70,6 +73,10 @@ function adjustedTopLevelXySlot(oldRoot, oldPath) {
 }
 function elementChildrenOnly(el) {
     return Array.from(el?.childNodes || []).filter(n => n.nodeType === 1);
+}
+function stampRealizePlacement(op, unifiedRoot, container, ghost) {
+    op.realizeParentPath = indexPathForNodeRelative(unifiedRoot, container);
+    op.realizeIndex = elementChildrenOnly(container).indexOf(ghost);
 }
 function isBranchContainer(elOrTag) {
     const t = typeof elOrTag === "string"
@@ -136,6 +143,9 @@ function tryPlaceDeletedBranchInsideSurvivingGateway(op, unifiedRoot, ctx, ghost
 
     if (kids[idx]) container.insertBefore(ghost, kids[idx]);
     else container.appendChild(ghost);
+
+    stampRealizePlacement(op, unifiedRoot, container, ghost);
+
 
     console.error("PLACE DELETED BRANCH GHOST INSIDE SURVIVING GATEWAY", {
         oldPath: op.oldPath,
@@ -266,6 +276,8 @@ function tryPlaceReplacementDeleteGhost(op, unifiedRoot, ctx, ghost) {
     const p = replacementAnchor.parentNode || unifiedRoot;
     p.insertBefore(ghost, replacementAnchor);
 
+    stampRealizePlacement(op, unifiedRoot, p, ghost);
+
     console.error("PLACE DELETE BEFORE REPLACEMENT", {
         oldPath: op.oldPath,
         oldId,
@@ -276,6 +288,7 @@ function tryPlaceReplacementDeleteGhost(op, unifiedRoot, ctx, ghost) {
 }
 
 function tryPlaceByOldNeighborsPreferMoveGhost(
+    op,
     unifiedRoot,
     ownerOld,
     ghost,
@@ -322,6 +335,7 @@ function tryPlaceByOldNeighborsPreferMoveGhost(
 
         if (found.anchor.nextSibling) p.insertBefore(ghost, found.anchor.nextSibling);
         else p.appendChild(ghost);
+        stampRealizePlacement(op, unifiedRoot, p, ghost);
         return true;
     }
 
@@ -340,6 +354,7 @@ function tryPlaceByOldNeighborsPreferMoveGhost(
     if (found?.anchor) {
         const p = found.anchor.parentNode || unifiedRoot;
         p.insertBefore(ghost, found.anchor);
+        stampRealizePlacement(op, unifiedRoot, p, ghost);
         return true;
     }
 
@@ -541,6 +556,7 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
         }
 
         const okNeighbor = tryPlaceByOldNeighborsPreferMoveGhost(
+            op,
             unifiedRoot,
             ownerOld,
             ghost,
@@ -593,19 +609,22 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
 
     // CpeeDiff / original delete placement
     if (ghostKind === "delete") {
+        const originalOldPath = op.oldPath;
+        op.oldPath = op.rebasedOldPath || op.oldPath;
+
         const okReplacement = tryPlaceReplacementDeleteGhost(
-            {
-                ...op,
-                oldPath: op.rebasedOldPath || op.oldPath
-            },
+            op,
             unifiedRoot,
             ctx,
             ghost
         );
 
+        op.oldPath = originalOldPath;
+
         if (okReplacement) return;
 
         const okNei = tryPlaceByOldNeighborsPreferMoveGhost(
+            op,
             unifiedRoot,
             ownerOld,
             ghost,
@@ -651,41 +670,6 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
             return;
         }
 
-        const ownerParentPath = parentPath(op.rebasedOldPath || op.oldPath);
-        const isTopLevelDelete = ownerParentPath === "/";
-/*
-        if (isTopLevelDelete) {
-            const okNei = tryPlaceByOldNeighborsPreferMoveGhost(
-                unifiedRoot,
-                ownerOld,
-                ghost,
-                ctx.movedOldIds,
-                ctx.deletedOldIds
-            );
-
-            if (okNei) {
-                console.log("GHOST placedBy=topLevelNeighbor", {
-                    ghostId: ghost.getAttribute("id"),
-                    unifiedTopAfter: topLevelDrawableOrder(unifiedRoot, 25),
-                });
-                return;
-            }
-
-            const okIdx = insertIntoContainerAtOldIndex(
-                unifiedRoot,
-                ghost,
-                ownerOld
-            );
-
-            console.log("GHOST topLevel oldIndexFallback", okIdx, {
-                ghostId: ghost.getAttribute("id"),
-                oldIdx: indexAmongDrawableSiblings(ownerOld),
-                unifiedTopAfter: topLevelDrawableOrder(unifiedRoot, 25),
-            });
-
-            return;
-        }*/
-
         const ok = insertIntoContainerAtOldIndex(unifiedRoot, ghost, ownerOld);
         console.log("rootInsertAtOldIndex", ok);
         return;
@@ -703,6 +687,7 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
         if (okSourceSlot) return;
 
         const okNei = tryPlaceByOldNeighborsPreferMoveGhost(
+            op,
             unifiedRoot,
             ownerOld,
             ghost,

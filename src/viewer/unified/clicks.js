@@ -96,11 +96,19 @@ function buildClickPayload(clickedId, opsForId) {
             sidNew: op.sidNew || null,
             oldPath: op.oldPath || null,
             newPath: op.newPath || null,
+            realizeParentPath: op.realizeParentPath || null,
+            realizeIndex: Number.isInteger(op.realizeIndex) ? op.realizeIndex : null,
             contentOld: op.contentOld || null,
             contentNew: op.contentNew || null,
-            subtreeIdsOld: op.subtreeIdsOld || [],
-            subtreeIdsNew: op.subtreeIdsNew || [],
-            selfOldId: op.selfOldId || null,
+            contentDiff: op.contentDiff || null,
+            subtreeIdsOld: Array.isArray(op.subtreeIdsOld) && op.subtreeIdsOld.length
+                ? [...op.subtreeIdsOld]
+                : [op.sidOld || op.selfOldId || op.id].filter(Boolean),
+
+            subtreeIdsNew: Array.isArray(op.subtreeIdsNew) && op.subtreeIdsNew.length
+                ? [...op.subtreeIdsNew]
+                : [op.sidNew || op.sidOld || op.id].filter(Boolean),
+            selfOldId: op.selfOldId || op.sidOld || op.sidNew || op.id || null,
             mergeOwnerId: op.mergeOwnerId || null,
         })),
     };
@@ -158,10 +166,6 @@ export function installUnifiedClickHandler({ unifiedRoot, opsByIdDirect, opsById
                 .concat(opsByIdDirect.get(baseClickedId) || [])
                 .concat(opsByIdDirect.get("ele-" + clickedId) || [])
                 .concat(opsByIdDirect.get("ele-" + baseClickedId) || []);
-
-            const xmlNode = unifiedRoot.querySelector?.(`*[id="${CSS.escape(clickedId)}"]`);
-            const clickedIsGateway = xmlNode && isGatewayTagName(tagName(xmlNode));
-            const clickedIsGhost = clickedId.startsWith("__ghost");
 
             // if direct lookup fails, try region lookup from the surrounding SVG group
             if (!opsForId.length) {

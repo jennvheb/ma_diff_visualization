@@ -151,165 +151,6 @@ function addDroppedXmMoveRecoveries(ctx, state, droppedMoveCandidates, updatedOw
         alreadyMovedIds.add(String(oldId));
     }
 }
-
-function addStableIdMoveRecoveries(ctx, state, updatedOwnerPaths, updatedOwnerIds) {
-    const { baseOld, baseNew, newDrawablesById } = ctx;
-    const { operations } = state;
-
-    const alreadyMovedIds = new Set(
-        operations
-            .filter(o => o.kind === "move" || o.kind === "moveupdate")
-            .map(o => elementByRelIndexPath(baseOld, o.oldPath)?.getAttribute?.("id"))
-            .filter(Boolean)
-            .map(String)
-    );
-
-    const emittedMoveOldPaths = new Set(
-        operations
-            .filter(o => o.kind === "move" || o.kind === "moveupdate")
-            .map(o => o.oldPath)
-            .filter(Boolean)
-    );
-
-    const oldById = collectStructuralById(baseOld, baseOld);
-
-    for (const [id, oldInfo] of oldById.entries()) {
-        if (alreadyMovedIds.has(id)) continue;
-
-        const newEl = newDrawablesById.get(id);
-        if (!newEl) continue;
-
-        const oldPath = oldInfo.path;
-        const newPath = indexPathForNodeRelative(baseNew, newEl);
-
-        if (!oldPath || !newPath || oldPath === newPath) continue;
-
-        const oldParentPath = pathParent(oldPath);
-        const newParentPath = pathParent(newPath);
-
-        const oldParent = elementByRelIndexPath(baseOld, oldParentPath);
-        const newParent = elementByRelIndexPath(baseNew, newParentPath);
-
-        const oldParentId = oldParent?.getAttribute?.("id") || null;
-        const newParentId = newParent?.getAttribute?.("id") || null;
-
-        const samePhysicalParentPath = oldParentPath === newParentPath;
-
-        const sameLogicalParent =
-            samePhysicalParentPath ||
-            (
-                oldParentId &&
-                newParentId &&
-                String(oldParentId) === String(newParentId)
-            );
-
-        const hasOwnUpdate =
-            updatedOwnerPaths.has(oldPath) ||
-            updatedOwnerIds.has(id);
-
-        const isOnlySiblingIndexShift =
-            sameLogicalParent &&
-            isSameParentIndexShift(oldPath, newPath);
-
-        /*
-         * Stable-id recovery is a fallback.
-         * If the node stayed inside the same logical parent and only its sibling
-         * index changed, we should not invent a move/moveupdate.
-         *
-         * If the node was updated too, the update op is already in operations.
-         * So this becomes "update only", not "moveupdate".
-         */
-        if (isOnlySiblingIndexShift) {
-            console.error("SKIP STABLE-ID RECOVERY - SAME-PARENT INDEX SHIFT", {
-                id,
-                oldPath,
-                newPath,
-                oldParentPath,
-                newParentPath,
-                oldParentId,
-                newParentId,
-                hasOwnUpdate
-            });
-            continue;
-        }
-
-        /*
-         * Additional passive-shift guard for cases where parent ids are missing
-         * or unstable but an insert clearly explains the index shift.
-         */
-        if (isPassiveSiblingShiftByInsert(operations, oldPath, newPath)) {
-            console.error("skip stable id recovery - insert sibling shift", {
-                id,
-                oldPath,
-                newPath,
-                hasOwnUpdate
-            });
-            continue;
-        }
-
-        // Important: avoid passive fill-ins like a18 moving into a16's old slot.
-        if (emittedMoveOldPaths.has(newPath)) {
-            const blockingMove = operations.find(o =>
-                (o.kind === "move" || o.kind === "moveupdate") &&
-                o.oldPath === newPath
-            );
-
-            if (sameParentMove({ oldPath, newPath })) {
-                console.error("skip stable id recovery - same parent", {
-                    id,
-                    oldPath,
-                    newPath,
-                    blockingMove
-                });
-                continue;
-            }
-
-            if (blockingMove && sameParentMove(blockingMove)) {
-                console.error("remove false blocking move", {
-                    recoveredId: id,
-                    recoveredOldPath: oldPath,
-                    recoveredNewPath: newPath,
-                    removed: blockingMove
-                });
-
-                const idx = operations.indexOf(blockingMove);
-                if (idx >= 0) operations.splice(idx, 1);
-
-                const blockedId = elementByRelIndexPath(baseOld, blockingMove.oldPath)
-                    ?.getAttribute?.("id");
-
-                if (blockedId) alreadyMovedIds.delete(String(blockedId));
-            }
-        }
-
-        /*
-         * Only now decide whether it is move or moveupdate.
-         * This is now only for real parent/subtree changes, not sibling shifts.
-         */
-        const meaningful = hasOwnUpdate;
-
-        console.error("recover stable id move", {
-            id,
-            oldPath,
-            newPath,
-            oldParentPath,
-            newParentPath,
-            oldParentId,
-            newParentId,
-            meaningful
-        });
-
-        operations.push({
-            kind: meaningful ? "moveupdate" : "move",
-            oldPath,
-            newPath,
-            recoveredFromStableId: true
-        });
-
-        alreadyMovedIds.add(id);
-        emittedMoveOldPaths.add(oldPath);
-    }
-}
 export function pairMoves(ctx, state) {
     const {
         baseOld,
@@ -460,6 +301,7 @@ export function pairMoves(ctx, state) {
 
         const oldEl = elementByRelIndexPath(baseOld, del.oldPath);
         const oldId = oldEl?.getAttribute?.("id") || null;
+        let finalNewPath = chosenNewPath;
 
         if (oldId) {
             const mappedNewEl = newDrawablesById.get(String(oldId)) || null;
@@ -467,8 +309,10 @@ export function pairMoves(ctx, state) {
             if (mappedNewEl) {
                 const realNewRel = indexPathForNodeRelative(baseNew, mappedNewEl);
 
+
                 if (realNewRel && chosenNewPath && realNewRel !== chosenNewPath) {
                     console.error("MOVE TARGET OVERRIDDEN", { xmKey, chosenNewPath, realNewRel });
+                    finalNewPath = realNewRel;
                 }
 
                 if (realNewRel && realNewRel === del.oldPath) {
@@ -487,7 +331,7 @@ export function pairMoves(ctx, state) {
             }
         }
 
-        if ((del.oldPath || "") !== (chosenNewPath || "")) {
+        if ((del.oldPath || "") !== (finalNewPath || "")) {
             const movedOldPath = del.oldPath;
             const movedOldEl = elementByRelIndexPath(baseOld, movedOldPath);
             const movedOldId = movedOldEl?.getAttribute?.("id") || null;
@@ -516,12 +360,12 @@ export function pairMoves(ctx, state) {
                 }
             }
             const dbgOldEl = elementByRelIndexPath(baseOld, del.oldPath);
-            const dbgNewEl = elementByRelIndexPath(baseNew, chosenNewPath);
+            const dbgNewEl = elementByRelIndexPath(baseNew, finalNewPath);
 
             console.error("PAIR MOVE EMIT", {
                 xmKey,
                 oldPath: del.oldPath,
-                newPath: chosenNewPath,
+                newPath: finalNewPath,
                 oldTag: dbgOldEl?.localName || null,
                 oldId: dbgOldEl?.getAttribute?.("id") || null,
                 newTag: dbgNewEl?.localName || null,
@@ -532,7 +376,7 @@ export function pairMoves(ctx, state) {
             operations.push({
                 kind: meaningful ? "moveupdate" : "move",
                 oldPath: del.oldPath,
-                newPath: chosenNewPath,
+                newPath: finalNewPath,
                 newPayload: meaningful ? ins.payload : null
             });
         } else {

@@ -8,6 +8,14 @@ function describeOp(op) {
     return `${op.type} ${id}`;
 }
 
+function undoKey(op) {
+    const oldP = op.rebasedOldPath || op.oldPath || "";
+    const newP = op.rebasedNewPath || op.newPath || "";
+    const id = op.sidOld || op.sidNew || op.selfOldId || op.id || "";
+
+    return `${op.type}|${id}|${oldP}|${newP}`;
+}
+
 function scoreOpForClickedId(op, clickedId) {
     let score = 0;
     if (!clickedId || !op) return score;
@@ -24,32 +32,57 @@ function scoreOpForClickedId(op, clickedId) {
     return score;
 }
 
-function esc(s) {
-    return String(s)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
+
+
+function sameLogicalNode(a, b) {
+    if (!a || !b) return false;
+
+    const aIds = [
+        a.id,
+        a.sidOld,
+        a.sidNew,
+        a.selfOldId,
+        a.mergeOwnerId
+    ].filter(Boolean);
+
+    const bIds = [
+        b.id,
+        b.sidOld,
+        b.sidNew,
+        b.selfOldId,
+        b.mergeOwnerId
+    ].filter(Boolean);
+
+    return aIds.some(id => bIds.includes(id));
 }
 
-function renderXmlBlock(label, xml) {
-    if (!xml) {
-        return `
-            <div style="margin-top:6px;">
-                <div style="font-weight:600;">${label}</div>
-                <div style="font-size:12px; color:#888;"><em>not available</em></div>
-            </div>
-        `;
-    }
-
-    return `
-        <div style="margin-top:6px;">
-            <div style="font-weight:600;">${label}</div>
-            <pre style="margin:4px 0 0; padding:8px; background:#f7f7f7; border:1px solid #eee; border-radius:6px; overflow:auto; font-size:12px; white-space:pre-wrap;">${esc(xml)}</pre>
-        </div>
-    `;
+function intersects(a = [], b = []) {
+    const set = new Set((a || []).filter(Boolean));
+    return (b || []).some(x => x && set.has(x));
 }
 
-function expandUndoOps(op) {
+function findReplacementPair(op, allOps = []) {
+    if (!op) return null;
+
+    const oppositeType =
+        op.type === "delete" ? "insert" :
+            op.type === "insert" ? "delete" :
+                null;
+
+    if (!oppositeType) return null;
+
+    return allOps.find(other => {
+        if (other === op || other.type !== oppositeType) return false;
+
+        return (
+            sameLogicalNode(op, other) ||
+            intersects(op.subtreeIdsOld, other.subtreeIdsNew) ||
+            intersects(op.subtreeIdsNew, other.subtreeIdsOld)
+        );
+    }) || null;
+}
+
+function expandUndoOps(op, allOps = []) {
     if (!op) return [];
 
     if (op.type === "moveupdate") {
@@ -63,9 +96,61 @@ function expandUndoOps(op) {
         ];
     }
 
+    const pair = findReplacementPair(op, allOps);
+
+    if (pair) {
+        const insertOp = op.type === "insert" ? op : pair;
+        const deleteOp = op.type === "delete" ? op : pair;
+
+        return [insertOp, deleteOp];
+    }
+
     return [op];
 }
 
+
+function toUndoPayloadOp(op) {
+    return {
+        opKey: op.opKey || null,
+        type: op.type,
+
+        id: op.id || null,
+        path: op.path || null,
+
+        oldPath: op.oldPath || null,
+        newPath: op.newPath || null,
+        realizeParentPath: op.realizeParentPath || null,
+        realizeIndex: Number.isInteger(op.realizeIndex) ? op.realizeIndex : null,
+        rebasedOldPath: op.rebasedOldPath || null,
+        rebasedNewPath: op.rebasedNewPath || null,
+        realizeReplacesPath: op.realizeReplacesPath || null,
+
+
+        sidOld: op.sidOld || null,
+        sidNew: op.sidNew || null,
+        selfOldId: op.selfOldId || op.sidOld || op.sidNew || op.id || null,        mergeOwnerId: op.mergeOwnerId || null,
+        mergeOwnerPath: op.mergeOwnerPath || null,
+
+        payloadTag: op.payloadTag || null,
+        payloadText: op.payloadText || "",
+        payloadXml: op.payloadXml || "",
+        realizeBeforeId: op.realizeBeforeId || null,
+        realizeAfterId: op.realizeAfterId || null,
+
+        subtreeIdsOld: Array.isArray(op.subtreeIdsOld) && op.subtreeIdsOld.length
+            ? [...op.subtreeIdsOld]
+            : [op.sidOld || op.selfOldId || op.id].filter(Boolean),
+
+        subtreeIdsNew: Array.isArray(op.subtreeIdsNew) && op.subtreeIdsNew.length
+            ? [...op.subtreeIdsNew]
+            : [op.sidNew || op.sidOld || op.id].filter(Boolean),
+        undoKey: op.undoKey || undoKey(op),
+
+        contentOld: op.contentOld ? structuredClone(op.contentOld) : null,
+        contentNew: op.contentNew ? structuredClone(op.contentNew) : null,
+        contentDiff: op.contentDiff ? structuredClone(op.contentDiff) : null
+    };
+}
 export function installUndoController() {
     const pop = document.getElementById("undo-popover");
     const body = document.getElementById("undo-popover-body");
@@ -132,16 +217,30 @@ export function installUndoController() {
     undoBtn?.addEventListener("click", () => {
         if (!state.selectedOp) return;
 
+        const expanded = expandUndoOps(
+            state.selectedOp,
+            window.ALL_DIFF_OPS || state.selectedPayload?.updates || []
+        );
+
+        console.log("UNDO expanded ops", expanded.map(o => ({
+            type: o.type,
+            sidOld: o.sidOld,
+            sidNew: o.sidNew,
+            oldPath: o.oldPath,
+            newPath: o.newPath,
+            rebasedOldPath: o.rebasedOldPath,
+            rebasedNewPath: o.rebasedNewPath
+        })));
+
         const msg = {
             type: "UNDO_REQUEST",
-            ops: expandUndoOps(state.selectedOp)
+            ops: expanded.map(toUndoPayloadOp)
         };
 
         console.log("UNDO sending request", msg);
         window.parent?.postMessage(msg, "*");
         window.dispatchEvent(new CustomEvent("undo-request", { detail: msg }));
     });
-
     cancelBtn?.addEventListener("click", hide);
 
     return { hide, showForPayload };
