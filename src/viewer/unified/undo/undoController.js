@@ -181,17 +181,11 @@ export function installUndoController() {
         state.selectedOp = [...payload.updates]
             .sort((a, b) => scoreOpForClickedId(b, payload.clickedId) - scoreOpForClickedId(a, payload.clickedId))[0];
 
-        const opsHtml = payload.updates.map((op, idx) => {
-            const selected = idx === 0 ? " <strong>(selected)</strong>" : "";
-            return `
-        <div style="margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid #eee;">
-            <div><strong>${describeOp(op)}</strong></div>
-       
-        </div>
-    `;
-        }).join("");
-
-        body.innerHTML = opsHtml;
+        body.innerHTML = payload.updates.map(op => `
+            <div style="margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid #eee;">
+                <strong>${describeOp(op)}</strong>
+            </div>
+        `).join("");
         pop.hidden = false;
     }
 

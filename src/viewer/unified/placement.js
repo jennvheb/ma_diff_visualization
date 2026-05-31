@@ -2,7 +2,7 @@ import {isGatewayTagName, nearestDrawable, tagName} from "../../integration/stab
 import {bestMatchGatewayInNew, ghostifyId, isSyntheticGw, prefixDrawableIdsInSubtree} from "./ids.js";
 import {
     drawableChildrenOnly,
-    findAnchorInUnifiedById, findDrawableSiblingsInOld, findNearestExistingAncestorInUnified,
+    findAnchorInUnifiedById, findNearestExistingAncestorInUnified,
     indexAmongDrawableSiblings,
     insertIntoContainerAtOldIndex,
     insertIntoContainerAtReservedOldIndex, recoverById, topLevelDrawableOrder, tryPlaceInsideDeletedParentGhost
@@ -374,25 +374,6 @@ function recoverByPath(root, path) {
     }
 
     return cur;
-}
-function findSamePathParentContainer(op, unifiedRoot, oldRoot) {
-    const oldPath = op.rebasedOldPath || op.oldPath;
-    if (!oldPath) return null;
-
-    const pp = parentPath(oldPath);
-
-    const oldParent = recoverByPath(oldRoot, pp);
-    const unifiedParent = recoverByPath(unifiedRoot, pp);
-
-    if (
-        oldParent &&
-        unifiedParent &&
-        tagName(oldParent) === tagName(unifiedParent)
-    ) {
-        return unifiedParent;
-    }
-
-    return null;
 }
 function tryPlaceBySameId(unifiedRoot, op, ghost, allowSameId) {
     if (!allowSameId) return false;

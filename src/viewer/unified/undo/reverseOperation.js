@@ -2,13 +2,12 @@ import {
     parseXml,
     serializeXml,
     getDslRoot,
-    resolveNode,
     getParentPath,
     getLastPathIndex,
     cloneIntoDoc,
     replaceElement,
     removeElement,
-    insertElementAt, resolveNodeById, resolveNodeByPath, resolveNodeRobust
+    insertElementAt, resolveNodeRobust
 } from "./xmlPatchUtils.js";
 import {stampLogicalIds} from "../../../integration/stableIds.js";
 
@@ -34,8 +33,6 @@ function resolveClosestExistingAncestor(root, path) {
 
 function pruneCloneDescendantsAlreadyPresent(cloneRoot, currentNewRoot) {
     if (!cloneRoot || !currentNewRoot) return;
-
-    const rootId = cloneRoot.getAttribute?.("id") || null;
 
     const descendants = allElementsWithId(cloneRoot);
 

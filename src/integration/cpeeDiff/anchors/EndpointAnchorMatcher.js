@@ -54,7 +54,7 @@ export class EndpointAnchorMatcher {
             const map = new Map();
             for (const n of nodes) {
                 const raw = readTaskLabel(n);
-                if (!raw) continue; // or allow __NO_LABEL__ if you want
+                if (!raw) continue;
                 if (!map.has(raw)) map.set(raw, []);
                 map.get(raw).push(n);
             }

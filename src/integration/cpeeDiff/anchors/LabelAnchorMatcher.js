@@ -12,7 +12,6 @@ export class LabelAnchorMatcher {
                 const lab = readTaskLabel(v);
                 if (!lab) continue;
 
-                //  const key = `${tagOf(v)}::${norm(lab)}`;
                 const key = `${tagOf(v)}::${lab}`;
                 if (!map.has(key)) map.set(key, []);
                 map.get(key).push(v);

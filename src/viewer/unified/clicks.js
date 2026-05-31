@@ -1,4 +1,3 @@
-import {isGatewayTagName, tagName} from "../../integration/stableIds.js";
 import {idVariants, normalizeElementId} from "./ids.js";
 
 export function opKey(op) {
@@ -120,7 +119,7 @@ function unwrapGhostId(id) {
         .replace(/^__ghost_delete__/, "")
         .replace(/^__ghost_move__/, "");
 }
-export function installUnifiedClickHandler({ unifiedRoot, opsByIdDirect, opsByIdRegion, opsByKey }) {
+export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsByKey }) {
     const layout = document.getElementById("layout-new");
     const svg = document.getElementById("graph-new");
     if (!layout && !svg) return;

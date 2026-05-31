@@ -33,75 +33,9 @@ function isRenameMoveArtifact(del, ins, baseOld, renamedNewIds, renamedIdPairs) 
     const oldPos = Number(del.pos);
     const newPos = Number(ins.pos);
     if (!Number.isFinite(oldPos) || !Number.isFinite(newPos)) return false;
-    if (Math.abs(oldPos - newPos) > 1) return false;
+    return Math.abs(oldPos - newPos) <= 1;
 
-    return true;
-}
 
-function pathParent(p) {
-    const parts = String(p || "").split("/").filter(Boolean);
-    parts.pop();
-    return "/" + parts.join("/");
-}
-
-function pathLastIndex(p) {
-    const parts = String(p || "").split("/").filter(Boolean);
-    return Number(parts[parts.length - 1]);
-}
-
-function isSameParentIndexShift(oldPath, newPath) {
-    if (pathParent(oldPath) !== pathParent(newPath)) return false;
-
-    const oi = pathLastIndex(oldPath);
-    const ni = pathLastIndex(newPath);
-
-    return Number.isFinite(oi) && Number.isFinite(ni) && oi !== ni;
-}
-
-function hasInsertBeforeOrAtSiblingSlot(operations, parent, newIndex) {
-    return operations.some(o => {
-        if (o.kind !== "insert" || !o.newPath) return false;
-        if (pathParent(o.newPath) !== parent) return false;
-
-        const ii = pathLastIndex(o.newPath);
-        return Number.isFinite(ii) && ii <= newIndex;
-    });
-}
-
-function isPassiveSiblingShiftByInsert(operations, oldPath, newPath) {
-    if (!isSameParentIndexShift(oldPath, newPath)) return false;
-
-    const parent = pathParent(newPath);
-    const newIndex = pathLastIndex(newPath);
-
-    return hasInsertBeforeOrAtSiblingSlot(operations, parent, newIndex);
-}
-
-function sameParentMove(o) {
-    return pathParent(o.oldPath) === pathParent(o.newPath);
-}
-
-function collectStructuralById(root, baseRoot) {
-    const out = new Map();
-
-    function walk(node) {
-        if (!node || node.nodeType !== 1) return;
-
-        const id = node.getAttribute?.("id");
-        if (id) {
-            const p = indexPathForNodeRelative(baseRoot, node);
-            if (p && isStructuralRel(baseRoot, p)) {
-                out.set(String(id), { node, path: p });
-            }
-        }
-
-        for (const c of Array.from(node.childNodes || [])) {
-            walk(c);
-        }
-    }
-
-    walk(root);
-    return out;
 }
 
 function addDroppedXmMoveRecoveries(ctx, state, droppedMoveCandidates, updatedOwnerPaths, updatedOwnerIds) {

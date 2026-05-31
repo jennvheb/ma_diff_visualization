@@ -80,13 +80,10 @@ export function editScriptToOps(editScript, rawDiffXml = "") {
 
         const payloadNode = firstExisting(
             op.newContent,
-            op.oldContent,
             op.content,
             op.node,
             op.update,
             op.payload,
-            op._newContent,
-            op._oldContent
         );
 
         console.log("cpeediff op content payload", {
@@ -102,7 +99,6 @@ export function editScriptToOps(editScript, rawDiffXml = "") {
         const id =
             xmlPayload?.payloadId ||
             nodeAttr(op.newContent, "id") ||
-            nodeAttr(op.oldContent, "id") ||
             null;
 
         return {

@@ -21,99 +21,12 @@ function isSameOrDescendantPath(path, ancestor) {
     return path === ancestor || path.startsWith(ancestor + "/");
 }
 
-function isPrefixPath(path, prefix) {
-    return path === prefix || path.startsWith(prefix + "/");
-}
 function opKey(op) {
     const oldP = op.rebasedOldPath || op.oldPath || "";
     const newP = op.rebasedNewPath || op.newPath || "";
     const id = op.sidOld || op.sidNew || op.selfOldId || op.id || "";
 
     return `${op.type}|${id}|${oldP}|${newP}`;
-}
-
-function shiftPathAfterInsert(path, insertPath) {
-    if (!path || !insertPath) return path;
-
-    const p = path.split("/").filter(Boolean).map(Number);
-    const i = insertPath.split("/").filter(Boolean).map(Number);
-
-    if (p.length !== i.length) return path;
-
-    const sameParent = p.slice(0, -1).join("/") === i.slice(0, -1).join("/");
-    if (!sameParent) return path;
-
-    if (p[p.length - 1] >= i[i.length - 1]) {
-        p[p.length - 1]++;
-    }
-
-    return "/" + p.join("/");
-}
-
-function shiftPathAfterRemoval(path, removedPath) {
-    if (!path || !removedPath) return path;
-
-    // If the path is inside the removed subtree, no valid slot remains.
-    if (isPrefixPath(path, removedPath)) return path;
-
-    const p = path.split("/").filter(Boolean).map(Number);
-    const r = removedPath.split("/").filter(Boolean).map(Number);
-
-    if (p.length !== r.length) return path;
-
-    const sameParent = p.slice(0, -1).join("/") === r.slice(0, -1).join("/");
-    if (!sameParent) return path;
-
-    if (p[p.length - 1] > r[r.length - 1]) {
-        p[p.length - 1]--;
-    }
-
-    return "/" + p.join("/");
-}
-
-function ghostSourcePathAtDeltaTime(op, ctx) {
-    let p = op.rebasedOldPath || op.oldPath;
-    const myIdx = op.deltaIndex ?? Infinity;
-
-    for (const other of ctx.ops || []) {
-        const otherIdx = other.deltaIndex ?? Infinity;
-        if (otherIdx >= myIdx) continue;
-
-        if (other.type === "insert") {
-            p = shiftPathAfterInsert(p, other.rebasedNewPath || other.newPath);
-        }
-
-        if (
-            other.type === "delete" ||
-            other.type === "move" ||
-            other.type === "moveupdate"
-        ) {
-            p = shiftPathAfterRemoval(p, other.rebasedOldPath || other.oldPath);
-        }
-    }
-
-    return p;
-}
-
-function isCoveredByDeletedSubtree(oldPath, metaOps) {
-    return metaOps.some(op => {
-        if (op.type !== "delete") return false;
-
-        const deletePath = op.rebasedOldPath || op.oldPath;
-        return isSameOrDescendantPath(oldPath, deletePath);
-    });
-}
-
-function isCoveredByExplicitMove(oldPath, metaOps) {
-    return metaOps.some(op => {
-        if (op.type !== "move" && op.type !== "moveupdate") return false;
-
-        // synthetic recovered moves should not suppress other candidates
-        if (op.recoveredFromStableId) return false;
-
-        const movePath = op.rebasedOldPath || op.oldPath;
-        return isSameOrDescendantPath(oldPath, movePath);
-    });
 }
 function recoverStableIdMovesForCpeeDiff(metaOps, oldRoot, newRoot, isXy) {
     if (isXy) return metaOps;
@@ -315,8 +228,6 @@ function parentCoversChildMove(parentOp, childOp) {
     const parentNew = parentOp.rebasedNewPath || parentOp.newPath || null;
     const childNew = childOp.rebasedNewPath || childOp.newPath || null;
     if (isStrictDescendantPath(childNew, parentNew)) return true;
-
-    return false;
 }
 
 function suppressNestedMoveOps(metaOps) {
@@ -701,7 +612,6 @@ export function renderUnifiedApp({
         colorizeUnified(idx, metaOps);
 
         installUnifiedClickHandler({
-            unifiedRoot,
             opsByIdDirect,
             opsByIdRegion,
             opsByKey
