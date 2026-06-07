@@ -22,6 +22,7 @@ function selectedSingleAnchor() {
     return a.length === 1 ? a[0] : null;
 }
 
+// extract the relevant anchor value
 function anchorValue(node, anchor) {
     if (!node) return null;
 
@@ -43,6 +44,7 @@ function anchorValue(node, anchor) {
     return null;
 }
 
+// enforces a strict matching rule, so that nodes that breach the anchor rules don't get matched anyway
 export function allowFallbackMatch(oldNode, newNode) {
     const anchor = selectedSingleAnchor();
     if (!anchor) return true;

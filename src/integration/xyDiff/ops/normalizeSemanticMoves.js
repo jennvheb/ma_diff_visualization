@@ -10,6 +10,11 @@ import {signatureForDrawable} from "../dom/signatures.js";
 import {BRANCH_CONTAINER_TAGS} from "../../tags.js";
 import {nearestOwningGateway} from "../dom/drawableUtils.js";
 
+/**
+ * same parent & same depth & new index = old index -1 -> not a real move, an earlier sibling was instead deleted
+ * @param move
+ * @returns {boolean}
+ */
 function isOneStepLeftShift(move) {
     if (!move?.oldPath || !move?.newPath) return false;
     if (parentPath(move.oldPath) !== parentPath(move.newPath)) return false;
@@ -20,6 +25,11 @@ function isOneStepLeftShift(move) {
     return Number.isFinite(oldIdx) && Number.isFinite(newIdx) && newIdx === oldIdx - 1;
 }
 
+/**
+ * same parent & same depth & new index = old index -1 -> not a real move, an earlier sibling was instead inserted
+ * @param move
+ * @returns {boolean}
+ */
 function isOneStepRightShift(move) {
     if (!move?.oldPath || !move?.newPath) return false;
     if (parentPath(move.oldPath) !== parentPath(move.newPath)) return false;
@@ -30,10 +40,28 @@ function isOneStepRightShift(move) {
     return Number.isFinite(oldIdx) && Number.isFinite(newIdx) && newIdx === oldIdx + 1;
 }
 
+/**
+ * generates a move key
+ * used for deduplication, pairing, tracking
+ *
+ * @param m
+ * @returns {string}
+ */
 function moveKey(m) {
     return `${m.oldPath}=>${m.newPath}`;
 }
 
+/**
+ * score whether a move is real
+ * -> a move with same id/signature is likely a real move
+ * tag and xydiff alone not enough evidence
+ *
+ * @param m
+ * @param baseOld
+ * @param baseNew
+ * @param pairedByXm
+ * @returns {{score: number, sameTag: boolean, sameId: boolean, newId: (*|string), sameSignature: boolean, oldId: (*|string)}|{score: number, sameTag: boolean, sameId: boolean, newId: null, sameSignature: boolean, oldId: null}}
+ */
 function getMoveIdentityEvidence(m, { baseOld, baseNew, pairedByXm = false }) {
     if (!m?.oldPath || !m?.newPath) {
         return {
@@ -89,6 +117,15 @@ function getMoveIdentityEvidence(m, { baseOld, baseNew, pairedByXm = false }) {
     };
 }
 
+/**
+ * score whether a move is likely a passive index shifting
+ * higher passive score means its probably not a real semantic move
+ *
+ * @param m
+ * @param moves
+ * @param deletes
+ * @returns {{score: number, reasons: *[]}}
+ */
 function getMovePassiveEvidence(m, moves, deletes) {
     if (!m?.oldPath || !m?.newPath) {
         return {
@@ -170,6 +207,14 @@ function getMovePassiveEvidence(m, moves, deletes) {
     return { score, reasons };
 }
 
+/**
+ * checks if two moves are sibling shifts in the same parent area
+ * used to cluster related shifts
+ *
+ * @param a
+ * @param b
+ * @returns {boolean}
+ */
 function sameLocalNeighborhood(a, b) {
     if (!a?.oldPath || !a?.newPath || !b?.oldPath || !b?.newPath) return false;
     if (parentPath(a.oldPath) !== parentPath(b.oldPath)) return false;
@@ -179,6 +224,16 @@ function sameLocalNeighborhood(a, b) {
     return true;
 }
 
+/**
+ * for a cluster of sibling one-step shifts, choose the most likely real move
+ * this prevents showing every passive shift as a move
+ *
+ * @param moves
+ * @param baseOld
+ * @param baseNew
+ * @param deletes
+ * @returns {*[]}
+ */
 function chooseWinnersAmongSiblingShifts(moves, { baseOld, baseNew, deletes }) {
     const out = [];
     const consumed = new Set();
@@ -248,22 +303,6 @@ function chooseWinnersAmongSiblingShifts(moves, { baseOld, baseNew, deletes }) {
             semantic: "explicit-real-move"
         });
 
-        console.error("move cluster", {
-            cluster: scored.map(s => ({
-                oldPath: s.move.oldPath,
-                newPath: s.move.newPath,
-                identScore: s.ident.score,
-                passiveScore: s.passive.score,
-                passiveReasons: s.passive.reasons,
-                finalScore: s.finalScore,
-                sameId: s.ident.sameId,
-                sameSignature: s.ident.sameSignature
-            })),
-            winner: {
-                oldPath: winner.move.oldPath,
-                newPath: winner.move.newPath
-            }
-        });
 
         for (const s of scored) {
             consumed.add(s.key);
@@ -273,6 +312,19 @@ function chooseWinnersAmongSiblingShifts(moves, { baseOld, baseNew, deletes }) {
     return out;
 }
 
+/**
+ * cleans up move operations so passive sibling shifts are not incorrectly visualized as real moves
+ * it separates deletes, moves, others
+ * then handles two cases:
+ * 1. gateway container proxy moves: if deleting a branch causes neighboring branches to shift, it may infer that the owning gateway/container moved
+ * 2. one-step sibling shifts: splits moves into one-step shifts and non-shift moves and shift moves are further processed to find a winner
+ * important because xydiff over-reports moves due to index shifts
+ *
+ * @param ops
+ * @param baseOld
+ * @param baseNew
+ * @returns {*[]}
+ */
 export function normalizeSemanticMoves({ ops, baseOld, baseNew }) {
     const deletes = ops.filter(o => o.kind === "delete" && o.oldPath);
     const moves = ops.filter(o => o.kind === "move" && o.oldPath && o.newPath);
@@ -331,16 +383,6 @@ export function normalizeSemanticMoves({ ops, baseOld, baseNew }) {
             for (const m of proxyMoves) {
                 consumedMoveKeys.add(moveKey(m));
             }
-
-            console.error("NORMALIZE PROXY -> GATEWAY MOVE", {
-                deletePath: del.oldPath,
-                gatewayOldPath,
-                gatewayNewPath,
-                droppedProxyMoves: proxyMoves.map(m => ({
-                    oldPath: m.oldPath,
-                    newPath: m.newPath
-                }))
-            });
         }
     }
 

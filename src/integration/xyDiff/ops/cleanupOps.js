@@ -1,6 +1,21 @@
-import {isCoveredByDelete} from "../dom/pathUtils.js";
+import {isDescendantPath} from "../dom/pathUtils.js";
 
-// if an update is deleted, only visualize the delete
+export function isCoveredByDelete(path, deletedRoots) {
+    if (!path) return false;
+
+    for (const r of deletedRoots) {
+        if (!r || r === path) continue; // ignore self
+        if (isDescendantPath(path, r)) return true; // any strict ancestor delete covers it
+    }
+    return false;
+}
+
+/**
+ * removes operations that are already covered by larger deletes
+ *
+ * @param operationsFinal
+ * @returns {*}
+ */
 export function cleanupOps(operationsFinal) {
     const deleteRootsFinal = operationsFinal
         .filter(o => o.kind === "delete" && o.oldPath && o.oldPath !== "/?")

@@ -1,3 +1,9 @@
+/**
+ * parses XML, finds the CPEE <description> element, and gives it to WfAdaptor
+ *
+ * @param xmlString
+ * @param targetSvgId
+ */
 function renderWithCpeeLayout(xmlString, targetSvgId) {
     const NS = "http://cpee.org/ns/description/1.0";
 
@@ -16,7 +22,8 @@ function renderWithCpeeLayout(xmlString, targetSvgId) {
     const descDoc = $.parseXML(descXml);
 
     const themeUrl = "../../cpee-layout/themes/preset/theme.js";
-
+    // Converts the <description> back into XML for cpee-layout
+    // Creates the CPEE layout graph
     new window.WfAdaptor(themeUrl, function (graph) {
         const $svg = $("#" + targetSvgId);
 
@@ -28,11 +35,23 @@ function renderWithCpeeLayout(xmlString, targetSvgId) {
     });
 }
 
+/**
+ * Serializes a DOM root and renders it
+ *
+ * @param xmlRoot
+ */
 export function renderUnifiedXml(xmlRoot) {
     const xmlStr = new XMLSerializer().serializeToString(xmlRoot);
     renderWithCpeeLayout(xmlStr, "graph-new");
 }
 
+/**
+ * Parses XML and returns the last CPEE <description> element
+ * Used by renderUnifiedApp() before normalization/rendering
+ *
+ * @param xmlStr
+ * @returns {*|null}
+ */
 export function getDescRoot(xmlStr) {
     const parser = new DOMParser();
     const NS = "http://cpee.org/ns/description/1.0";

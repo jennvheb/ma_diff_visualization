@@ -18,14 +18,29 @@ export function parentPath(pathStr) {
     return "/" + s.slice(0, -1).join("/");
 }
 
+/**
+ * checks whether one path is inside another
+ * important for detecting whether an edit is already covered by a larger deleted subtree
+ *
+ * @param child
+ * @param ancestor
+ * @returns {boolean|boolean}
+ */
 export function isDescendantPath(child, ancestor) {
     if (!child || !ancestor) return false;
     if (ancestor === "/") return true;
     return child === ancestor || child.startsWith(ancestor.replace(/\/+$/, "") + "/");
 }
 
+/**
+ * find the deepest deleted ancestor that contains a path
+ * useful to avoid showing redundant child deletes when the parent branch is already deleted
+ *
+ * @param path
+ * @param deletedRoots
+ * @returns {null}
+ */
 export function findContainingDeletedRoot(path, deletedRoots) {
-    // pick the deepest deleted root that contains path (most specific)
     let best = null;
     for (const r of deletedRoots) {
         if (isDescendantPath(path, r)) {
@@ -35,16 +50,14 @@ export function findContainingDeletedRoot(path, deletedRoots) {
     return best;
 }
 
-export function isCoveredByDelete(path, deletedRoots) {
-    if (!path) return false;
-
-    for (const r of deletedRoots) {
-        if (!r || r === path) continue; // ignore self
-        if (isDescendantPath(path, r)) return true; // any strict ancestor delete covers it
-    }
-    return false;
-}
-
+/**
+ * if path points too deep, trim upward until an existing element is found
+ * important because xydiff may point to a low-level child that the viewer cannot directly color
+ *
+ * @param baseElem
+ * @param relPath
+ * @returns {*|string}
+ */
 export function trimRelPathToExistingElement(baseElem, relPath) {
     let s = segs(relPath);
     while (s.length) {
@@ -56,6 +69,13 @@ export function trimRelPathToExistingElement(baseElem, relPath) {
     return relPath;
 }
 
+/**
+ * cimpute relative index path of a DOM node
+ *
+ * @param baseElem
+ * @param node
+ * @returns {string|null}
+ */
 export function indexPathForNodeRelative(baseElem, node) {
     if (!baseElem || !node) return null;
 
@@ -91,6 +111,13 @@ export function indexPathForNodeRelative(baseElem, node) {
     return "/" + indices.join("/");
 }
 
+/**
+ * locate node from xydiff paths
+ *
+ * @param baseElem
+ * @param relPath
+ * @returns {*|null}
+ */
 export function elementByRelIndexPath(baseElem, relPath) {
     if (!baseElem || !relPath) return null;
     let node = baseElem;

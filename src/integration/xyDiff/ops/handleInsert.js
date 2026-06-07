@@ -10,7 +10,7 @@ import {isDrawableTagName, payloadIsShiftingOnly, snapRelPathToDrawable} from ".
 import {resolveMoveObjectRelByParPos, resolveNewPathForInsert} from "../xid/resolveByParPos.js";
 import {elementByRelIndexPath, indexPathForNodeRelative, trimRelPathToExistingElement} from "../dom/pathUtils.js";
 import {
-    findOldRelById,
+    findRelById,
     isTextOnlyInsert,
     ownerOldPathForNewInsert,
     pushUpdateNode,
@@ -19,6 +19,14 @@ import {
 import {buildXyDiffXidIndex} from "../xid/xidMap.js";
 import {NON_STRUCTURAL_MOVE_TAGS} from "../../tags.js";
 
+/**
+ * checks whether an internal insert belongs to a node that is already being moved
+ * avoids creating false updates inside a moved subtree
+ *
+ * @param state
+ * @param ownerOldPath
+ * @returns {boolean}
+ */
 function isOwnerPartOfPendingMove(state, ownerOldPath) {
     if (!ownerOldPath) return false;
 
@@ -30,6 +38,14 @@ function isOwnerPartOfPendingMove(state, ownerOldPath) {
     return false;
 }
 
+/**
+ * checks whether an id is involved in rename tracking
+ * used to avoid turning rename artifacts into moves/updates incorrectly
+ *
+ * @param id
+ * @param state
+ * @returns {*|boolean|boolean}
+ */
 function isIdInRename(id, state) {
     if (!id) return false;
 
@@ -40,6 +56,14 @@ function isIdInRename(id, state) {
     );
 }
 
+/**
+ * searches existing delete operations for a deleted node with a certain id
+ *
+ * @param operations
+ * @param baseOld
+ * @param id
+ * @returns {*|null}
+ */
 function findDeleteOpByOldId(operations, baseOld, id) {
     if (!id) return null;
 
@@ -53,64 +77,40 @@ function findDeleteOpByOldId(operations, baseOld, id) {
     }) || null;
 }
 
+/**
+ * converts XYDiff insert edits into either insert, update-node, update-text, move, or pending move-insert entries
+ * insert does not always mean real inserted process node
+ *
+ * @param edit
+ * @param ctx
+ * @param state
+ */
 export function handleInsert(edit, ctx, state) {
     const { baseOld, baseNew, newXidIndex, newDom, serializer } = ctx;
 
     const isMove = edit.getAttribute("move") === "yes";
-    const xmRaw = edit.getAttribute("xm");
-    const xmId = firstXmId(xmRaw);
-
-    console.error(
-        "INSERT DATA",
-        "move=", isMove,
-        "par=", edit.getAttribute("par"),
-        "pos=", edit.getAttribute("pos"),
-        "xm=", xmRaw,
-        "xmId=", xmId
-    );
 
     const insertedNode = firstElementChild(edit);
 
     if (insertedNode && payloadIsShiftingOnly(insertedNode)) {
-        console.error("SKIP SHIFTING-ONLY INSERT", {
-            newPath: resolveNewPathForInsert(edit, baseNew, newXidIndex),
-            tag: (insertedNode.localName || insertedNode.tagName || "").toLowerCase()
-        });
         return;
     }
 
     if (!isMove && insertedNode) {
         const tag = (insertedNode.localName || insertedNode.tagName || "").toLowerCase();
-        if (tag === "arguments") {
-            console.error("SKIP INSERT arguments", {
-                newPath: resolveNewPathForInsert(edit, baseNew, newXidIndex),
-                par: edit.getAttribute("par"),
-                pos: edit.getAttribute("pos"),
-                xm: edit.getAttribute("xm")
-            });
+        if (tag === "arguments") { // argument changes are handled as updates not inserts
             return;
         }
     }
 
     const payload = insertedNode ? serializer.serializeToString(insertedNode) : null;
 
-    if (payload) {
-        const tag = insertedNode ? (insertedNode.localName || insertedNode.tagName) : null;
-        console.error("INS PAYLOAD TAG", tag);
-        console.error("INS PAYLOAD XML", payload.slice(0, 500));
-    }
-
-    if (isMove) {
+    if (isMove) { // similar behavior to delete move, so they can be later combined to move in pairmoves()
         const xmKey = normalizeXmKey(edit.getAttribute("xm"));
         const xmIdMove = firstXmId(edit.getAttribute("xm"));
         const rawTag = xidElTag(newXidIndex, xmIdMove);
 
         if (rawTag && NON_STRUCTURAL_MOVE_TAGS.has(rawTag)) {
-            console.error("SKIP MOVE-INSERT NON-STRUCTURAL RAW TAG", {
-                xmId: xmIdMove,
-                rawTag,
-                xm: edit.getAttribute("xm")
-            });
             return;
         }
 
@@ -127,16 +127,8 @@ export function handleInsert(edit, ctx, state) {
                 pos: edit.getAttribute("pos"),
                 payload
             });
-
-            console.error("MOVE-INSERT STORED", xmKey, "newPath=", newOwnerPath, "xmId=", xmIdMove, "rawTag=", rawTag);
             return;
         }
-
-        console.error("MOVE-INSERT FAILED", xmKey, {
-            xmId: xmIdMove,
-            par: edit.getAttribute("par"),
-            pos: edit.getAttribute("pos")
-        });
         return;
     }
 
@@ -145,11 +137,8 @@ export function handleInsert(edit, ctx, state) {
         resolveRelPathByXid(newXidIndex, baseNew, firstXmId(edit.getAttribute("xm")), { snapIfNotDrawable: false }) ||
         "/?";
 
-    const before = newPath;
     const exists = elementByRelIndexPath(baseNew, newPath);
-    if (!exists) newPath = trimRelPathToExistingElement(baseNew, newPath);
-
-    console.error("[INS NEWPATH]", { before, after: newPath, exists: !!exists });
+    if (!exists) newPath = trimRelPathToExistingElement(baseNew, newPath); // make sure newPath points to an existing element in the new tree
 
     newPath = trimRelPathToExistingElement(baseNew, newPath);
 
@@ -157,9 +146,9 @@ export function handleInsert(edit, ctx, state) {
         const payloadId = insertedNode?.getAttribute?.("id") || null;
 
         if (payloadId) {
-            const oldRel = findOldRelById(baseOld, payloadId);
+            const oldRel = findRelById(baseOld, payloadId); // if inserted payload has an id, check whether it already existed
 
-            if (oldRel && !isIdInRename(payloadId, state)) {
+            if (oldRel && !isIdInRename(payloadId, state)) { // but skip it for renamed ids (e.g. xydiff emits au id change from a1 to a2, then seeing a2 in new should not become move a2
                 const oldPath = snapRelPathToDrawable(baseOld, oldRel);
 
                 const matchingDelete = findDeleteOpByOldId(
@@ -168,20 +157,13 @@ export function handleInsert(edit, ctx, state) {
                     payloadId
                 );
 
-                if (matchingDelete) {
+                if (matchingDelete) { // same id was deleted before -> delete+insert becomes move/update
                     const moveOldPath = matchingDelete.oldPath || oldPath;
 
-                    console.error("same id delete+insert", {
-                        id: payloadId,
-                        oldPath,
-                        deletedPath: matchingDelete.oldPath,
-                        moveOldPath,
-                        newPath
-                    });
 
                     const deleteIdx = state.operations.indexOf(matchingDelete);
                     if (deleteIdx >= 0) state.operations.splice(deleteIdx, 1);
-
+                    // if path changed of same id: move
                     if (moveOldPath && newPath && moveOldPath !== newPath) {
                         console.error("same id delete+insert becomes move", {
                             id: payloadId,
@@ -197,7 +179,7 @@ export function handleInsert(edit, ctx, state) {
 
                         return;
                     }
-
+                    // if path did not change of same id: update
                     console.error("same id delete insert becomes update", {
                         id: payloadId,
                         oldPath: moveOldPath,
@@ -213,28 +195,15 @@ export function handleInsert(edit, ctx, state) {
 
                     return;
                 }
-
+                // same id exists in old but there was no delete operation
                 if (oldPath && newPath && oldPath !== newPath) {
-                    console.error("same id delete+insert becomes move paths don't match", {
-                        id: payloadId,
-                        oldPath,
-                        newPath
-                    });
-
                     state.operations.push({
                         kind: "move",
                         oldPath,
                         newPath
                     });
-
                     return;
                 }
-
-                console.error("fallback same id becomes update", {
-                    id: payloadId,
-                    oldPath,
-                    newPath
-                });
 
                 pushUpdateNode(
                     state.operations,
@@ -247,7 +216,7 @@ export function handleInsert(edit, ctx, state) {
             }
         }
 
-        if (isTextOnlyInsert(edit)) {
+        if (isTextOnlyInsert(edit)) { // text only inserts become text updates
             const xidPreorderNew = buildXyDiffXidIndex(newDom);
             const parId = edit.getAttribute("par");
             const parentElem = xidPreorderNew.get(String(parId));
@@ -271,15 +240,10 @@ export function handleInsert(edit, ctx, state) {
         const payloadTag =
             insertedNode ? (insertedNode.localName || insertedNode.tagName || "").toLowerCase() : null;
 
-        const payloadIsDrawable = payloadTag && isDrawableTagName(payloadTag);
+        const payloadIsDrawable = payloadTag && isDrawableTagName(payloadTag); // non-drawable inserted payload becomes update
 
         if (!payloadIsDrawable) {
             let ownerOldPath = ownerOldPathForNewInsert(baseOld, baseNew, newPath);
-
-            console.error("[NON-DRAWABLE INSERT -> UPDATE-NODE OWNER]", {
-                newPath,
-                ownerOldPath
-            });
 
             if (!ownerOldPath) {
                 const ownerNewRel = snapRelPathToDrawable(baseNew, newPath);
@@ -288,15 +252,8 @@ export function handleInsert(edit, ctx, state) {
                 }
             }
 
-            if (ownerOldPath) {
+            if (ownerOldPath) { // but skip the update if its part of a move (used to prevent false move+update noise)
                 const skipBecausePendingMove = isOwnerPartOfPendingMove(state, ownerOldPath);
-
-                console.error("owner debug", {
-                    newPath,
-                    ownerOldPath_raw: ownerOldPath,
-                    ownerOldTag: elementByRelIndexPath(baseOld, ownerOldPath)?.localName || null,
-                    skipBecausePendingMove
-                });
 
                 if (!skipBecausePendingMove) {
                     pushUpdateNode(state.operations, baseOld, ownerOldPath, payload);
@@ -304,7 +261,7 @@ export function handleInsert(edit, ctx, state) {
                 }
             }
         }
-
+        // final fallback: real insert
         state.operations.push({ kind: "insert", newPath, payload });
     }
 }

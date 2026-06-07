@@ -1,9 +1,21 @@
 const XML_NS = "http://cpee.org/ns/description/1.0";
 
+/**
+ * Parses XML string into DOM document
+ *
+ * @param xmlString
+ * @returns {Document}
+ */
 export function parseXml(xmlString) {
     return new DOMParser().parseFromString(xmlString, "text/xml");
 }
 
+/**
+ * Serializes DOM document back into XML string
+ *
+ * @param doc
+ * @returns {string}
+ */
 export function serializeXml(doc) {
     return new XMLSerializer().serializeToString(doc);
 }
@@ -25,10 +37,13 @@ export function childElements(node) {
     return Array.from(node?.childNodes || []).filter(n => n.nodeType === 1);
 }
 
-export function elementChildrenByTag(node, tagName) {
-    return childElements(node).filter(el => el.localName === tagName);
-}
-
+/**
+ * Finds element by id using CSS selector
+ *
+ * @param root
+ * @param id
+ * @returns {*|null}
+ */
 export function findElementById(root, id) {
     if (!root || !id) return null;
     return root.querySelector?.(`*[id="${CSS.escape(id)}"]`) || null;
@@ -59,6 +74,13 @@ export function getLastPathIndex(path) {
     return Number(segs[segs.length - 1]);
 }
 
+/**
+ * Clones a node into another XML document
+ *
+ * @param node
+ * @param targetDoc
+ * @returns {*|null}
+ */
 export function cloneIntoDoc(node, targetDoc) {
     if (!node || !targetDoc) return null;
     return targetDoc.importNode
@@ -66,6 +88,13 @@ export function cloneIntoDoc(node, targetDoc) {
         : node.cloneNode(true);
 }
 
+/**
+ * Replaces one XML element with another
+ *
+ * @param targetEl
+ * @param replacementEl
+ * @returns {boolean}
+ */
 export function replaceElement(targetEl, replacementEl) {
     if (!targetEl || !replacementEl || !targetEl.parentNode) return false;
     targetEl.parentNode.replaceChild(replacementEl, targetEl);
@@ -78,7 +107,15 @@ export function removeElement(el) {
     return true;
 }
 
-// Insert before the 1-based element index within the parent. If index is larger than the number of children + 1, append.
+/**
+ * Insert before the 1-based element index within the parent
+ * If index is larger than the number of children + 1, append
+ *
+ * @param parentEl
+ * @param childEl
+ * @param oneBasedIndex
+ * @returns {boolean}
+ */
 export function insertElementAt(parentEl, childEl, oneBasedIndex) {
     if (!parentEl || !childEl) return false;
 
@@ -94,19 +131,21 @@ export function insertElementAt(parentEl, childEl, oneBasedIndex) {
     return true;
 }
 
-export function resolveNodeById(root, id) {
-    return findElementById(root, id);
-}
-
-export function resolveNodeByPath(root, path) {
-    return findElementByRebasedPath(root, path);
-}
-
-// try ID first, then path. Keep this only for places where that fallback is really intended.
-export function resolveNode(root, { id, path }) {
-    return resolveNodeById(root, id) || resolveNodeByPath(root, path);
-}
-
+/**
+ * Tries multiple ways to find a node:
+ * 1. real id
+ * 2. stable/synthetic id
+ * 3. canonical path
+ * 4. rebased path
+ * Useful because after edits, paths may shift or ids may be synthetic
+ *
+ * @param root
+ * @param realId
+ * @param sid
+ * @param canonicalPath
+ * @param rebasedPath
+ * @returns {*|null}
+ */
 export function resolveNodeRobust(root, {
     realId,
     sid,
@@ -114,10 +153,10 @@ export function resolveNodeRobust(root, {
     rebasedPath
 }) {
     return (
-        resolveNodeById(root, realId) ||
-        resolveNodeById(root, sid) ||
-        resolveNodeByPath(root, canonicalPath) ||
-        resolveNodeByPath(root, rebasedPath) ||
+        findElementById(root, realId) ||
+        findElementById(root, sid) ||
+        findElementByRebasedPath(root, canonicalPath) ||
+        findElementByRebasedPath(root, rebasedPath) ||
         null
     );
 }

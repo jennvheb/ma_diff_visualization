@@ -1,4 +1,6 @@
-import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
+const { DOMParser, XMLSerializer } =
+    await import("@xmldom/xmldom");
+
 // normalize and standardize the paths for further processing
 function toPathString(p) {
     if (p == null) return null;
@@ -18,10 +20,12 @@ function toPathString(p) {
     return '/' + s;
 }
 
+// extracts text from payload node
 function nodeText(n) {
     return (n?.textContent || "").replace(/\s+/g, " ").trim();
 }
 
+// serializes payload node back to XML
 function nodeXml(n) {
     if (!n) return "";
     try {
@@ -31,10 +35,11 @@ function nodeXml(n) {
     }
 }
 
-function firstExisting(...xs) {
-    return xs.find(Boolean) || null;
-}
-
+/**
+ * parses the raw CpeeDiff XML and extracts payloads from update elements
+ * @param rawDiffXml
+ * @returns {Map<any, any>}
+ */
 function updatePayloadsByPath(rawDiffXml) {
     const map = new Map();
     if (!rawDiffXml) return map;
@@ -63,9 +68,21 @@ function updatePayloadsByPath(rawDiffXml) {
 
     return map;
 }
+
+function nodeTag(n) {
+    return n?.label || n?.localName || n?.tagName || null;
+}
+
 function nodeAttr(n, name) {
     return n?.attributes?.get?.(name) ?? n?.getAttribute?.(name) ?? null;
 }
+
+/**
+ * converts CpeeDiffs edit operations into normalized visualization format operations in json for easier access
+ * @param editScript
+ * @param rawDiffXml
+ * @returns {{path: string|string, payloadTag, payloadText, payloadXml, oldPath: null|string|string, from: string, id: *|string|null, type: *, newPath: null|string|string}[]}
+ */
 export function editScriptToOps(editScript, rawDiffXml = "") {
     const ops = editScript.editOperations || [];
     const updatePayloads = updatePayloadsByPath(rawDiffXml);
@@ -78,24 +95,8 @@ export function editScriptToOps(editScript, rawDiffXml = "") {
         const path = oldPath || newPath;
         const from = oldPath ? "old" : "new";
 
-        const payloadNode = firstExisting(
-            op.newContent,
-            op.content,
-            op.node,
-            op.update,
-            op.payload,
-        );
+        const payloadNode = op.newContent || null;
 
-        console.log("cpeediff op content payload", {
-            type: op.type,
-            keys: Object.keys(op),
-            oldPath,
-            newPath,
-            payloadTag: xmlPayload?.payloadTag || payloadNode?.localName || payloadNode?.tagName || null,
-            payloadText: xmlPayload?.payloadText || nodeText(payloadNode),
-            payloadXml: xmlPayload?.payloadXml || nodeXml(payloadNode),
-            op
-        });
         const id =
             xmlPayload?.payloadId ||
             nodeAttr(op.newContent, "id") ||
@@ -109,15 +110,11 @@ export function editScriptToOps(editScript, rawDiffXml = "") {
             newPath,
             from,
 
-            payloadTag: xmlPayload?.payloadTag || payloadNode?.localName || payloadNode?.tagName || null,
+            payloadTag: xmlPayload?.payloadTag || nodeTag(payloadNode),
             payloadText: xmlPayload?.payloadText || nodeText(payloadNode),
-            payloadXml: xmlPayload?.payloadXml || nodeXml(payloadNode),
+            payloadXml: xmlPayload?.payloadXml || nodeXml(payloadNode)
         };
     });
 
-    console.error("mapped (before filter) count", mapped.length);
-    console.error("dropped count", mapped.filter(o => !(o.type && o.path)).length);
-
     return mapped.filter(o => o.type && o.path);
 }
-// convert the edit script to json ops for the visualization for easier access

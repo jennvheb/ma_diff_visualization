@@ -1,8 +1,5 @@
 import {reverseOperations} from "./undo/reverseOperation.js";
-
-function parseXml(xml) {
-    return new DOMParser().parseFromString(xml, "application/xml");
-}
+import {findById} from "./xml.js";
 
 function serializeXml(node) {
     return new XMLSerializer().serializeToString(node);
@@ -28,6 +25,16 @@ function stripGhostSubtree(el) {
         }
     }
 }
+
+/**
+ * Checks whether a subtree contains any id from a list
+ * checks both raw ghost ids and cleaned ids
+ * Used to find ghost subtrees that contain the operation’s affected id
+ *
+ * @param root
+ * @param ids
+ * @returns {boolean}
+ */
 function subtreeContainsAnyId(root, ids) {
     for (const el of Array.from(root.querySelectorAll("*"))) {
         const raw = el.getAttribute("id");
@@ -37,6 +44,15 @@ function subtreeContainsAnyId(root, ids) {
     return false;
 }
 
+/**
+ * Sometimes a moved node’s old location is inside a deleted ghost region
+ * searches delete ghost subtrees to find one that contains the moved node
+ * Used as fallback for move undo
+ *
+ * @param root
+ * @param op
+ * @returns {unknown}
+ */
 function findContainingDeleteGhostForMove(root, op) {
     const ids = [
         op.sidOld,
@@ -58,11 +74,13 @@ function findContainingDeleteGhostForMove(root, op) {
     }) || null;
 }
 
-function findById(root, id) {
-    if (!root || !id) return null;
-    return root.querySelector(`*[id="${CSS.escape(id)}"]`);
-}
-
+/**
+ * Finds the ghost subtree representing a deleted old node
+ *
+ * @param root
+ * @param op
+ * @returns {unknown}
+ */
 function findDeleteGhost(root, op) {
     const ids = [
         op.sidOld,
@@ -82,6 +100,13 @@ function findDeleteGhost(root, op) {
     }) || null;
 }
 
+/**
+ * Finds the ghost subtree representing old moved location
+ *
+ * @param root
+ * @param op
+ * @returns {unknown|null}
+ */
 function findMoveGhost(root, op) {
     const ids = [
         op.sidOld,
@@ -113,6 +138,14 @@ function findMoveGhost(root, op) {
     return null;
 }
 
+/**
+ * Finds the current inserted/new node in the unified root
+ * Used when undoing insert or move
+ *
+ * @param root
+ * @param op
+ * @returns {*|null}
+ */
 function findInsertedNode(root, op) {
     const ids = [
         op.sidNew,
@@ -129,6 +162,15 @@ function findInsertedNode(root, op) {
     return null;
 }
 
+/**
+ * does undo using the already rendered unified model
+ * it takes the current unified XML containing: real new nodes, delete ghosts, move ghosts
+ * Then applies undo visually/structurally
+ *
+ * @param currentNewXml
+ * @param ops
+ * @returns {string}
+ */
 function realizeVisualUndoFromUnified({ currentNewXml, ops }) {
     const unified = window.__UNIFIED_ROOT__?.cloneNode(true);
     if (!unified) {
@@ -147,16 +189,13 @@ function realizeVisualUndoFromUnified({ currentNewXml, ops }) {
     for (const op of deleteOps) {
         const ghost = findDeleteGhost(unified, op);
         if (ghost) stripGhostSubtree(ghost);
-        else console.warn("visual undo: delete ghost not found", op);
     }
 
     for (const op of moveOps) {
         const ghost =
             findMoveGhost(unified, op) ||
             findContainingDeleteGhostForMove(unified, op);
-
         if (!ghost) {
-            console.warn("visual undo: move/delete-containing ghost not found", op);
             continue;
         }
 
@@ -171,12 +210,12 @@ function realizeVisualUndoFromUnified({ currentNewXml, ops }) {
         moved?.parentNode?.removeChild(moved);
         stripGhostSubtree(ghost);
     }
-
+    // After applying selected undo, remove remaining ghosts
     for (const g of Array.from(unified.querySelectorAll(`*[_ghost]`))) {
         g.parentNode?.removeChild(g);
     }
 
-    const currentDoc = parseXml(currentNewXml);
+    const currentDoc = new DOMParser().parseFromString(currentNewXml, "application/xml");
     const currentRoot = currentDoc.documentElement;
     const init = currentRoot.querySelector(`manipulate[id="init"]`);
 
@@ -196,6 +235,14 @@ function realizeVisualUndoFromUnified({ currentNewXml, ops }) {
     return serializeXml(unified);
 }
 
+/**
+ * Call local recompute server
+ * bridge back to computeDiffState()
+ *
+ * @param oldXml
+ * @param newXml
+ * @returns {Promise<*>}
+ */
 async function recomputeDiffOnHost({ oldXml, newXml }) {
     let resp;
     try {
@@ -231,6 +278,11 @@ async function recomputeDiffOnHost({ oldXml, newXml }) {
     return json.result;
 }
 
+/**
+ * installs an event listener for undo-request
+ *
+ * @param rerender
+ */
 export function installMockHostUndo({ rerender }) {
     const state = {
         baselineOldXml: window.OLD_TREE || window.OLD,
@@ -239,11 +291,11 @@ export function installMockHostUndo({ rerender }) {
 
     window.addEventListener("undo-request", async (e) => {
         const msg = e.detail;
-        const ops = msg?.ops;
+        const ops = msg?.ops; // Read ops when request arrives
         if (!ops?.length) return;
 
         console.log("mock host received undo request json", JSON.stringify(ops, null, 2));
-
+        // Decide undo method, if structural op or only update
         try {
             const usesVisualUndo = ops.some(o =>
                 o.type === "insert" ||
@@ -266,8 +318,8 @@ export function installMockHostUndo({ rerender }) {
             const diffResult = await recomputeDiffOnHost({
                 oldXml: state.baselineOldXml,
                 newXml: nextNewXml
-            });
-
+            }); // recompute diff
+            // update state
             state.baselineOldXml = diffResult.oldTreeXml || state.baselineOldXml;
             state.currentNewXml = diffResult.newTreeXml || nextNewXml;
 

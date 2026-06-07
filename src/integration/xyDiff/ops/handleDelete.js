@@ -1,7 +1,6 @@
 import {
-    dumpAttrs,
     pushUpdateNode,
-    resolveDeleteOldLogicalNodeFromRenamePayload,
+    resolveDeleteFromRename,
     resolveOldPathByDeletePayload
 } from "./opUtils.js";
 import {firstXmId, normalizeXmKey, resolveRelPathByXidForMove, xidElTag} from "../xid/resolveByXid.js";
@@ -18,36 +17,35 @@ import {
     payloadIsShiftingOnly,
     snapRelPathToDrawable
 } from "../dom/drawableUtils.js";
-import {elementByRelIndexPath} from "../dom/pathUtils.js";
 
-
+/**
+ * converts xydiff delete edits into either delete, update-node or pending move-delete entries
+ * xydiff deletes do not always mean that a real process node was deleted
+ *
+ * @param edit
+ * @param ctx
+ * @param state
+ */
 export function handleDelete(edit, ctx, state) {
     const { workDir, oldDom, baseOld, baseNew, oldXidIndex } = ctx;
-
-    console.error("XYDIFF EDIT", edit.localName, dumpAttrs(edit));
 
     const isMove = edit.getAttribute("move") === "yes";
 
     if (isMove) {
-        const xmRaw = edit.getAttribute("xm");
+        const xmRaw = edit.getAttribute("xm"); // identifies the moved node or moved subtree
         const xmKey = normalizeXmKey(xmRaw);
         const xmId = firstXmId(xmRaw);
         const rawTag = xidElTag(oldXidIndex, xmId);
 
-        if (rawTag && NON_STRUCTURAL_MOVE_TAGS.has(rawTag)) {
-            console.error("SKIP MOVE-DELETE NON-STRUCTURAL TAG", {
-                xmId,
-                rawTag,
-                xm: edit.getAttribute("xm")
-            });
+        if (rawTag && NON_STRUCTURAL_MOVE_TAGS.has(rawTag)) { // if a non-structural node moved (layout, metadata child nodes), ignore it
             return;
         }
 
         const oldPath =
             resolveMoveObjectRelByParPos(oldXidIndex, baseOld, edit.getAttribute("par"), edit.getAttribute("pos"))
-            || resolveRelPathByXidForMove(oldXidIndex, baseOld, xmId);
+            || resolveRelPathByXidForMove(oldXidIndex, baseOld, xmId); // resolve old path by parent/position or by xid
 
-        if (xmKey && oldPath) {
+        if (xmKey && oldPath) { // store the oldpath and node until it may be combined if matching move-insert can be found later
             state.pendingMoveDeletes.set(xmKey, {
                 oldPath,
                 xmId,
@@ -56,8 +54,6 @@ export function handleDelete(edit, ctx, state) {
                 pos: edit.getAttribute("pos"),
                 payload: firstElementChild(edit) ? ctx.serializer.serializeToString(firstElementChild(edit)) : null
             });
-
-            console.error("MOVE-DELETE STORED:", xmKey, "oldPath=", oldPath, "xmId=", xmId, "rawTag=", rawTag);
             return;
         }
     }
@@ -65,12 +61,10 @@ export function handleDelete(edit, ctx, state) {
     const payloadEl = firstElementChild(edit);
 
     if (payloadEl && payloadIsShiftingOnly(payloadEl)) {
-        console.error("SKIP SHIFTING DELETE:", {
-            oldPathGuess: resolveOldPathForDeleteOrUpdate(edit, workDir, oldDom, baseOld, oldXidIndex)
-        });
         return;
     }
 
+    // if only arguments were deleted, don't visualize the whole task as delete, instead flag it as update
     if (!isMove && payloadEl) {
         const payloadTag = (payloadEl.localName || payloadEl.tagName || "").toLowerCase();
 
@@ -91,7 +85,8 @@ export function handleDelete(edit, ctx, state) {
     const payloadIsDrawable = payloadTag && DIFF_BOUNDARY_TAGS.has(payloadTag);
 
     if (!isMove && payloadId && payloadIsDrawable) {
-        const rewritten = resolveDeleteOldLogicalNodeFromRenamePayload(
+        // if deleted payload is a full drawable node then first check the rename logic, as sometimes xydiff reports confusing edits due to id rename/replacements
+        const rewritten = resolveDeleteFromRename(
             baseOld,
             baseNew,
             payloadEl,
@@ -99,13 +94,6 @@ export function handleDelete(edit, ctx, state) {
         );
 
         if (rewritten) {
-            console.error("REWRITE DELETE - RENAME PAYLOAD TO OLD LOGICAL NODE:", {
-                payloadId: rewritten.payloadId,
-                oldId: rewritten.oldId,
-                oldRel: rewritten.oldRel,
-                newRel: rewritten.newRel
-            });
-
             state.operations.push({
                 kind: "delete",
                 oldPath: rewritten.oldRel
@@ -114,13 +102,11 @@ export function handleDelete(edit, ctx, state) {
         }
     }
 
+    // if deleted payload is not a process node, then it is probably an internal update
     if (!isMove && payloadEl && !payloadHasStructuralTags(payloadEl)) {
         if (payloadContainsShifting(payloadEl)) {
-            console.error("SKIP SHIFTING DELETE TO UPDATE:");
             return;
         }
-
-        const payloadTagLocal = (payloadEl.localName || payloadEl.tagName || "").toLowerCase();
 
         const ownerOldPath =
             resolveDrawableOwnerRelPathByParPos(oldXidIndex, baseOld, edit.getAttribute("par"), edit.getAttribute("pos"))
@@ -132,7 +118,6 @@ export function handleDelete(edit, ctx, state) {
         if (ownerOldPath && ownerOldPath !== "/?") {
             const tag = (payloadEl.localName || payloadEl.tagName || "").toLowerCase();
             pushUpdateNode(state.operations, baseOld, ownerOldPath, `<_child_deleted tag="${tag}"/>`);
-            console.error("DELETE TO UPDATE (no structural tags)", { tag: payloadTagLocal, ownerOldPath });
             return;
         }
     }
@@ -140,28 +125,15 @@ export function handleDelete(edit, ctx, state) {
     if (!isMove && payloadEl) {
         const pOld = resolveOldPathByDeletePayload(baseOld, payloadEl);
         if (pOld) {
-            console.error("DELETE RESOLVE BY PAYLOAD", {
-                payloadTag: payloadEl.localName,
-                oldPath: pOld,
-                oldTag: elementByRelIndexPath(baseOld, pOld)?.localName || null,
-                oldId: elementByRelIndexPath(baseOld, pOld)?.getAttribute?.("id") || null
-            });
-
             state.operations.push({ kind: "delete", oldPath: pOld });
             return;
         }
     }
 
+    // final fallback: resolve xydiff path/xid and snap to drawable node
     let oldPath = resolveOldPathForDeleteOrUpdate(edit, workDir, oldDom, baseOld, oldXidIndex) || "/?";
     oldPath = snapRelPathToDrawable(baseOld, oldPath);
 
-    console.error("DELETE RESOLVE:", {
-        oldPath,
-        payloadTag: payloadEl?.localName || null,
-        payloadId: payloadId || null,
-        oldTag: elementByRelIndexPath(baseOld, oldPath)?.localName || null,
-        oldId: elementByRelIndexPath(baseOld, oldPath)?.getAttribute?.("id") || null
-    });
 
     state.operations.push({ kind: "delete", oldPath });
 }

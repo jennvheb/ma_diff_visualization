@@ -5,6 +5,8 @@ import {
     parentPath
 } from "../dom/pathUtils.js";
 
+import {nearestDrawable} from "../../stableIds.js";
+
 import {
     childElements,
     findFirstElementById,
@@ -12,7 +14,6 @@ import {
 } from "../dom/domUtils.js";
 
 import {
-    nearestDrawableAncestor,
     nearestBranchContainer,
     isWithinConditionSubtree,
     snapRelPathToDrawable,
@@ -25,16 +26,6 @@ import {firstXmId} from "../xid/resolveByXid.js";
 import {
     isDescendantPath
 } from "../dom/pathUtils.js";
-
-export function dumpAttrs(el) {
-    const out = {};
-    if (!el || !el.attributes) return out;
-    for (let i = 0; i < el.attributes.length; i++) {
-        const a = el.attributes.item(i);
-        out[a.name] = a.value;
-    }
-    return out;
-}
 
 export function textContentTrimmed(node) {
     return String(node?.textContent || "").replace(/\s+/g, " ").trim();
@@ -51,6 +42,13 @@ export function isTextOnlyInsert(editI) {
     return !hasElementChildren(editI) && textContentTrimmed(editI).length > 0;
 }
 
+/**
+ * safely read an attribute
+ *
+ * @param el
+ * @param attr
+ * @returns {null|string}
+ */
 export function getAttrOrNull(el, attr) {
     if (!el || el.nodeType !== 1) return null;
     const v = el.getAttribute?.(attr);
@@ -65,16 +63,17 @@ export function escapeXmlAttr(s) {
         .replace(/>/g, "&gt;");
 }
 
+/**
+ * snap path to drawable node
+ * this is how deep xml changes become updates on visible process elements
+ *
+ * @param operations
+ * @param baseOld
+ * @param oldPath
+ * @param payload
+ */
 export function pushUpdateNode(operations, baseOld, oldPath, payload) {
     const snapped = snapRelPathToDrawable(baseOld, oldPath);
-    const el = elementByRelIndexPath(baseOld, snapped);
-
-    console.error("UPDATE-NODE SNAPPED", {
-        in: oldPath,
-        out: snapped,
-        tag: el?.localName || null,
-        id: el?.getAttribute?.("id") || null
-    });
 
     operations.push({
         kind: "update-node",
@@ -89,12 +88,14 @@ export function findRelById(baseElem, id) {
     return hit ? indexPathForNodeRelative(baseElem, hit) : null;
 }
 
-export function findOldRelById(baseOld, id) {
-    if (!id) return null;
-    const hit = findFirstElementById(baseOld, id);
-    return hit ? indexPathForNodeRelative(baseOld, hit) : null;
-}
-
+/**
+ * finds an id, but ignores it if it lies inside a deleted subtree
+ *
+ * @param baseElem
+ * @param id
+ * @param excludedRootRel
+ * @returns {null|{getAttribute}|*}
+ */
 export function findByIdOutsideSubtree(baseElem, id, excludedRootRel) {
     if (!baseElem || !id) return null;
     const hit = findFirstElementById(baseElem, id);
@@ -108,12 +109,22 @@ export function findByIdOutsideSubtree(baseElem, id, excludedRootRel) {
     return isDescendantPath(hitRel, excludedRootRel) ? null : hit;
 }
 
-export function resolveDeleteOldLogicalNodeFromRenamePayload(baseOld, baseNew, payloadEl, renamedIdPairs) {
+/**
+ * handles delete payloads caused by renames
+ * prevents wrong deletion paths when XYDiff payload carries the new id but old node is needed
+ *
+ * @param baseOld
+ * @param baseNew
+ * @param payloadEl
+ * @param renamedIdPairs
+ * @returns {{payloadId: (*|string), newRel: string, oldRel: (*|string), oldId: *}|null}
+ */
+export function resolveDeleteFromRename(baseOld, baseNew, payloadEl, renamedIdPairs) {
     if (!payloadEl) return null;
-
+    // read payload id
     const payloadId = payloadEl.getAttribute?.("id") || null;
     if (!payloadId) return null;
-
+    // map new id -> old id using renamedIdPairs
     const oldId = renamedIdPairs.get(String(payloadId));
     if (!oldId) return null;
 
@@ -121,18 +132,18 @@ export function resolveDeleteOldLogicalNodeFromRenamePayload(baseOld, baseNew, p
     const newRel = findRelById(baseNew, payloadId);
 
     if (!oldRel || !newRel) return null;
-
+    // find old/new paths
     const oldEl = elementByRelIndexPath(baseOld, oldRel);
     const newEl = elementByRelIndexPath(baseNew, newRel);
     if (!oldEl || !newEl) return null;
-
+    // checks same tag
     if (tagName(oldEl) !== tagName(newEl)) return null;
-
+    // check guard signatures
     const oldSig = drawableGuardSignature(oldEl);
     const newSig = drawableGuardSignature(newEl);
 
     if (oldSig && newSig && oldSig !== newSig) return null;
-
+    // return olf logical path
     return {
         oldId,
         payloadId,
@@ -141,6 +152,16 @@ export function resolveDeleteOldLogicalNodeFromRenamePayload(baseOld, baseNew, p
     };
 }
 
+/**
+ * given an insert path in the new tree, find the corresponding owner in old tree
+ * used when a non-drawable child was inserted
+ * the visual owner should be a task/gateway in the old tree
+ *
+ * @param baseOld
+ * @param baseNew
+ * @param newPath
+ * @returns {*|string|null}
+ */
 export function ownerOldPathForNewInsert(baseOld, baseNew, newPath) {
     if (!newPath) return null;
 
@@ -149,26 +170,27 @@ export function ownerOldPathForNewInsert(baseOld, baseNew, newPath) {
     if (!insertedAt) return null;
 
     const branch = nearestBranchContainer(insertedAt);
-    const nearestDrawable = nearestDrawableAncestor(insertedAt);
+    const nnearestDrawable = nearestDrawable(insertedAt);
 
     let ownerNew = null;
-
+    // try nearest branch/drawable owner in new tree
     if (branch) {
         if (isWithinConditionSubtree(branch, insertedAt)) {
             ownerNew = branch;
         } else {
-            ownerNew = nearestDrawable || branch;
+            ownerNew = nnearestDrawable || branch;
         }
     } else {
-        ownerNew = nearestDrawable;
+        ownerNew = nnearestDrawable;
     }
 
     if (!ownerNew) return null;
 
+    // try match by id in old tree
     let candidateOldRel = null;
     const ownerId = ownerNew.getAttribute?.("id") || null;
-    if (ownerId) candidateOldRel = findOldRelById(baseOld, ownerId);
-
+    if (ownerId) candidateOldRel = findRelById(baseOld, ownerId);
+    // fallback to same/parent path existing in old tree
     if (!candidateOldRel) {
         let relNewOwner = indexPathForNodeRelative(baseNew, ownerNew);
         while (relNewOwner && relNewOwner !== "/") {
@@ -182,15 +204,22 @@ export function ownerOldPathForNewInsert(baseOld, baseNew, newPath) {
     }
 
     if (!candidateOldRel) return null;
-
+    // snap to drawable
     return snapRelPathToDrawable(baseOld, candidateOldRel);
 }
 
+/**
+ * given a delete payload, find where that payload existed in the old tree
+ *
+ * @param baseOld
+ * @param payloadEl
+ * @returns {*|string|null}
+ */
 export function resolveOldPathByDeletePayload(baseOld, payloadEl) {
     if (!baseOld || !payloadEl) return null;
 
     const tag = (payloadEl.localName || payloadEl.tagName || "").toLowerCase();
-
+    // try payload id
     const pid = payloadEl.getAttribute?.("id");
     if (pid) {
         const hit = findFirstElementById(baseOld, pid);
@@ -202,6 +231,7 @@ export function resolveOldPathByDeletePayload(baseOld, payloadEl) {
         }
     }
 
+    // try descendant id
     const ids = collectDescendantIds(payloadEl, 50);
     for (const id of ids) {
         const hit = findFirstElementById(baseOld, id);
@@ -209,6 +239,7 @@ export function resolveOldPathByDeletePayload(baseOld, payloadEl) {
 
         let cur = hit;
         while (cur && cur !== baseOld) {
+            // try matching ancestor tag
             const curTag = (cur.localName || cur.tagName || "").toLowerCase();
             if (curTag === tag) {
                 const rel = indexPathForNodeRelative(baseOld, cur);
@@ -218,7 +249,8 @@ export function resolveOldPathByDeletePayload(baseOld, payloadEl) {
             cur = cur.parentNode;
         }
 
-        const owner = nearestDrawableAncestor(hit);
+        // try nearest drawable owner
+        const owner = nearestDrawable(hit);
         if (owner) {
             const rel = indexPathForNodeRelative(baseOld, owner);
             if (rel) return rel;
@@ -228,23 +260,35 @@ export function resolveOldPathByDeletePayload(baseOld, payloadEl) {
     return null;
 }
 
-export function localBareName(el) {
+/**
+ * return XML name without namespace prefix ("xy:")
+ * @param el
+ * @returns {string}
+ */
+export function xmlName(el) {
     const n = String(el?.localName || el?.tagName || "").toLowerCase();
     return n.includes(":") ? n.split(":").pop() : n;
 }
 
+/**
+ * extract new text from xydiff update node
+ * handles child nodes
+ *
+ * @param editU
+ * @returns {{length}|*|string|string|null}
+ */
 export function extractUText(editU) {
     if (!editU) return null;
 
     const kids = childElements(editU);
 
-    const tr = kids.find(e => localBareName(e) === "tr");
+    const tr = kids.find(e => xmlName(e) === "tr");
     if (tr) {
         const t = textContentTrimmed(tr);
         return t.length ? t : "";
     }
 
-    const tis = kids.filter(e => localBareName(e) === "ti");
+    const tis = kids.filter(e => xmlName(e) === "ti");
     if (tis.length) {
         const t = tis.map(textContentTrimmed).join("");
         return t.length ? t : "";
@@ -253,6 +297,15 @@ export function extractUText(editU) {
     return null;
 }
 
+/**
+ * use newxm to find the final text in the new DOM
+ * useful when xydiff update encoding is only partial and
+ * the actual final value is easier to read from the new tree
+ *
+ * @param editU
+ * @param newXidIndex
+ * @returns {string|null}
+ */
 export function extractFinalTextFromNewDom(editU, newXidIndex) {
     const newxmId = firstXmId(editU.getAttribute("newxm"));
     if (!newxmId) return null;

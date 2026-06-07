@@ -7,12 +7,24 @@ import {
     elementByRelIndexPath,
     findContainingDeletedRoot,
     indexPathForNodeRelative,
-    isCoveredByDelete
 } from "../dom/pathUtils.js";
 import {slotKeyFromParPos} from "../xid/resolveByParPos.js";
 import {findDrawableRelPathBySignature, signatureForDrawable} from "../dom/signatures.js";
 import {isStructuralRel} from "../dom/drawableUtils.js";
+import {isCoveredByDelete} from "./cleanupOps.js";
 
+/**
+ * detects false moves caused by renames
+ * if a moved element is involved in an id rename and old/new parent positions are nearly the same,
+ * it treats the move as an artifact and drops it
+ *
+ * @param del
+ * @param ins
+ * @param baseOld
+ * @param renamedNewIds
+ * @param renamedIdPairs
+ * @returns {boolean}
+ */
 function isRenameMoveArtifact(del, ins, baseOld, renamedNewIds, renamedIdPairs) {
     const movedEl = elementByRelIndexPath(baseOld, del.oldPath);
     const movedId = movedEl?.getAttribute?.("id") || null;
@@ -38,6 +50,17 @@ function isRenameMoveArtifact(del, ins, baseOld, renamedNewIds, renamedIdPairs) 
 
 }
 
+/**
+ * sometimes the parser drops an XYDiff move because it looked like noise,
+ * but the same old id clearly exists in a new different path
+ * -> recover those moves
+ *
+ * @param ctx
+ * @param state
+ * @param droppedMoveCandidates
+ * @param updatedOwnerPaths
+ * @param updatedOwnerIds
+ */
 function addDroppedXmMoveRecoveries(ctx, state, droppedMoveCandidates, updatedOwnerPaths, updatedOwnerIds) {
     const { baseOld, baseNew, newDrawablesById } = ctx;
     const { operations } = state;
@@ -51,6 +74,8 @@ function addDroppedXmMoveRecoveries(ctx, state, droppedMoveCandidates, updatedOw
     );
 
     for (const { xmKey, del, ins, reason } of droppedMoveCandidates) {
+        if (reason === "same-parent-adjacent-shift") continue;
+
         const oldEl = elementByRelIndexPath(baseOld, del.oldPath);
         const oldId = oldEl?.getAttribute?.("id");
         if (!oldId || alreadyMovedIds.has(String(oldId))) continue;
@@ -65,16 +90,6 @@ function addDroppedXmMoveRecoveries(ctx, state, droppedMoveCandidates, updatedOw
             updatedOwnerPaths.has(del.oldPath) ||
             updatedOwnerIds.has(String(oldId));
 
-        console.error("recover dropped xm move", {
-            xmKey,
-            reason,
-            id: oldId,
-            oldPath: del.oldPath,
-            newPath: realNewPath,
-            chosenNewPathWas: ins?.newPath,
-            meaningful
-        });
-
         operations.push({
             kind: meaningful ? "moveupdate" : "move",
             oldPath: del.oldPath,
@@ -85,6 +100,13 @@ function addDroppedXmMoveRecoveries(ctx, state, droppedMoveCandidates, updatedOw
         alreadyMovedIds.add(String(oldId));
     }
 }
+
+/**
+ * combines pending move-delete and move-insert parts into real move or moveupdate operations
+ *
+ * @param ctx
+ * @param state
+ */
 export function pairMoves(ctx, state) {
     const {
         baseOld,
@@ -97,7 +119,9 @@ export function pairMoves(ctx, state) {
     const droppedMoveCandidates = [];
 
     const { operations, pendingMoveDeletes, pendingMoveInserts } = state;
-
+    // identify nodes that were updated
+    // if the same node also moved, then final operation should be
+    // moveupdate instead of separate move + update
     const updatedOwnerPaths = new Set(
         operations
             .filter(o =>
@@ -114,24 +138,25 @@ export function pairMoves(ctx, state) {
         if (id) updatedOwnerIds.add(String(id));
     }
 
+    // don't emit moves for nodes inside a deleted subtree
     const deletedRoots = operations
         .filter(o => o.kind === "delete" && o.oldPath && o.oldPath !== "/?")
         .map(o => o.oldPath);
 
+    // loop over pending move deletes, try to find corresponding move-insert with same xmKey
     for (const [xmKey, del] of pendingMoveDeletes.entries()) {
         const ins = pendingMoveInserts.get(xmKey);
 
+        // if only delete side exists, treat as delete
         if (!ins) {
             operations.push({ kind: "delete", oldPath: del.oldPath });
             continue;
         }
-
+        // not a real move if old and new slot are the same, emit an update and drop the move
         const oldSlot = slotKeyFromParPos(oldXidIndex, baseOld, del.par, del.pos);
         const newSlot = slotKeyFromParPos(newXidIndex, baseNew, ins.par, ins.pos);
 
         if (oldSlot && newSlot && oldSlot === newSlot) {
-            console.error("MOVE->UPDATE same-slot", { xmKey, oldSlot });
-
             pushUpdateNode(
                 operations,
                 baseOld,
@@ -143,6 +168,7 @@ export function pairMoves(ctx, state) {
             continue;
         }
 
+        // resolve the new path
         const newPathDirect = ins?.newPath || null;
         const sOld = signatureForDrawable(baseOld, del.oldPath);
         const newPathBySig = (!newPathDirect && sOld)
@@ -150,15 +176,31 @@ export function pairMoves(ctx, state) {
             : null;
         const chosenNewPath = newPathDirect || newPathBySig;
 
-        if (isRenameMoveArtifact(del, ins, baseOld, state.renamedNewIds, state.renamedIdPairs)) {
-            console.error("DROP MOVE - RENAME", {
-                xmKey,
-                oldPath: del.oldPath,
-                par: del.par,
-                oldPos: del.pos,
-                newPos: ins.pos
-            });
+        const oldPar = del.par ? String(del.par) : null;
+        const newPar = ins.par ? String(ins.par) : null;
 
+        if (oldPar && newPar && oldPar === newPar) {
+            const oldPos = Number(del.pos);
+            const newPos = Number(ins.pos);
+
+            if (Number.isFinite(oldPos) && Number.isFinite(newPos)) {
+                const oldEl = elementByRelIndexPath(baseOld, del.oldPath);
+                const oldId = oldEl?.getAttribute?.("id") || null;
+                const newEl = elementByRelIndexPath(baseNew, chosenNewPath);
+                const newId = newEl?.getAttribute?.("id") || null;
+
+                // Same parent + adjacent index shift of the same node
+                // Usually caused by insertion/deletion before it, not a semantic move
+                if (oldId && newId && oldId === newId && Math.abs(oldPos - newPos) === 1) {
+                    droppedMoveCandidates.push({ xmKey, del, ins, reason: "same-parent-adjacent-shift" });
+                    pendingMoveInserts.delete(xmKey);
+                    continue;
+                }
+            }
+        }
+
+        // drop rename artifacts
+        if (isRenameMoveArtifact(del, ins, baseOld, state.renamedNewIds, state.renamedIdPairs)) {
             droppedMoveCandidates.push({
                 xmKey,
                 del,
@@ -169,6 +211,7 @@ export function pairMoves(ctx, state) {
             continue;
         }
 
+        // check whether renamed new id already exists elsewhere outside a deleted subtree and emit delete instead of move if yes
         {
             const oldEl = elementByRelIndexPath(baseOld, del.oldPath);
             const ovId = oldEl?.getAttribute?.("id") || null;
@@ -188,24 +231,7 @@ export function pairMoves(ctx, state) {
                 const existingElsewhere = findByIdOutsideSubtree(baseOld, nvId, delRoot);
 
                 if (existingElsewhere) {
-                    const existingRel = indexPathForNodeRelative(baseOld, existingElsewhere);
-
-                    console.error("DROP MOVE - RENAME ID COLLISION", {
-                        xmKey,
-                        oldPath: del.oldPath,
-                        deletedRoot: delRoot,
-                        renamedFrom: ovId,
-                        renamedTo: nvId,
-                        existingElsewhereRel: existingRel,
-                        chosenNewPath
-                    });
-
                     if (isCoveredByDelete(del.oldPath, deletedRoots)) {
-                        console.error("SKIP CHILD DELETE - COVERED BY ANCESTOR DELETE", {
-                            xmKey,
-                            child: del.oldPath,
-                            by: findContainingDeletedRoot(del.oldPath, deletedRoots)
-                        });
                     } else {
                         operations.push({ kind: "delete", oldPath: del.oldPath });
                     }
@@ -215,16 +241,10 @@ export function pairMoves(ctx, state) {
                 }
             }
         }
-
+        // don't emit a move if the node is not a drawable element
         if (!chosenNewPath || !isStructuralRel(baseOld, del.oldPath) || !isStructuralRel(baseNew, chosenNewPath)) {
-            console.error("DROP MOVE - NON-STRUCTURAL", { xmKey, oldPath: del.oldPath, chosenNewPath });
 
             if (isCoveredByDelete(del.oldPath, deletedRoots)) {
-                console.error("SKIP CHILD DELETE - COVERED BY ANCESTOR DELETE", {
-                    xmKey,
-                    child: del.oldPath,
-                    by: findContainingDeletedRoot(del.oldPath, deletedRoots)
-                });
             } else {
                 operations.push({ kind: "delete", oldPath: del.oldPath });
             }
@@ -236,7 +256,7 @@ export function pairMoves(ctx, state) {
         const oldEl = elementByRelIndexPath(baseOld, del.oldPath);
         const oldId = oldEl?.getAttribute?.("id") || null;
         let finalNewPath = chosenNewPath;
-
+        // use the new path to correct xydiffs moved path (sometimes paths need to be corrected due to ghosts/relative paths, etc.)
         if (oldId) {
             const mappedNewEl = newDrawablesById.get(String(oldId)) || null;
 
@@ -245,19 +265,10 @@ export function pairMoves(ctx, state) {
 
 
                 if (realNewRel && chosenNewPath && realNewRel !== chosenNewPath) {
-                    console.error("MOVE TARGET OVERRIDDEN", { xmKey, chosenNewPath, realNewRel });
                     finalNewPath = realNewRel;
                 }
 
                 if (realNewRel && realNewRel === del.oldPath) {
-                    console.error("DROP MOVE - SAME LOCATION", { xmKey, oldPath: del.oldPath });
-
-                 /*   pushUpdateNode(
-                        operations,
-                        baseOld,
-                        del.oldPath,
-                        `<_moved_noise xm="${escapeXmlAttr(xmKey)}"/>`
-                    );*/
                     droppedMoveCandidates.push({ xmKey, del, ins, reason: "same-path" });
                     pendingMoveInserts.delete(xmKey);
                     continue;
@@ -265,6 +276,7 @@ export function pairMoves(ctx, state) {
             }
         }
 
+        // if old/new paths differ
         if ((del.oldPath || "") !== (finalNewPath || "")) {
             const movedOldPath = del.oldPath;
             const movedOldEl = elementByRelIndexPath(baseOld, movedOldPath);
@@ -273,7 +285,7 @@ export function pairMoves(ctx, state) {
             const meaningful =
                 updatedOwnerPaths.has(movedOldPath) ||
                 (movedOldId && updatedOwnerIds.has(String(movedOldId)));
-
+            // if the update is meaningful (not noise) then emit a moveupdate else emit a move
             if (meaningful) {
                 for (let i = operations.length - 1; i >= 0; i--) {
                     const o = operations[i];
@@ -293,18 +305,15 @@ export function pairMoves(ctx, state) {
                     }
                 }
             }
-            const dbgOldEl = elementByRelIndexPath(baseOld, del.oldPath);
-            const dbgNewEl = elementByRelIndexPath(baseNew, finalNewPath);
 
-            console.error("PAIR MOVE EMIT", {
+            console.error("PAIR MOVE EMIT FULL", {
                 xmKey,
+                del,
+                ins,
                 oldPath: del.oldPath,
-                newPath: finalNewPath,
-                oldTag: dbgOldEl?.localName || null,
-                oldId: dbgOldEl?.getAttribute?.("id") || null,
-                newTag: dbgNewEl?.localName || null,
-                newId: dbgNewEl?.getAttribute?.("id") || null,
-                meaningful
+                chosenNewPath,
+                finalNewPath,
+                oldId,
             });
 
             operations.push({
@@ -314,8 +323,6 @@ export function pairMoves(ctx, state) {
                 newPayload: meaningful ? ins.payload : null
             });
         } else {
-            console.error("DROP MOVE - SAME PATH", { xmKey, oldPath: del.oldPath, chosenNewPath });
-
             droppedMoveCandidates.push({
                 xmKey,
                 del,
@@ -334,6 +341,8 @@ export function pairMoves(ctx, state) {
         updatedOwnerPaths,
         updatedOwnerIds
     );
+
+    // remaining unpaired inserts -> treat as inserts
     for (const [, ins] of pendingMoveInserts.entries()) {
         operations.push({ kind: "insert", newPath: ins.newPath, payload: null });
     }

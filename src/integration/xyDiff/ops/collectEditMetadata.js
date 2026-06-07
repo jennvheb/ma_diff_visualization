@@ -4,6 +4,12 @@ collect all edits that happen to a node and are relevant to the visualization
 this helps to inform if an endpoint or label or id change occured and tracks renames for ghost logic
 FIXME: relevance? endpoint or label? maybe more here from other functions too?
  */
+/**
+ * first pass over xydiff edits to collect useful information before creating final operations
+ *
+ * @param tNodes
+ * @param state
+ */
 export function collectEditMetadata(tNodes, state) {
     function markEdit(xid, what) {
         if (!xid) return;
@@ -12,8 +18,14 @@ export function collectEditMetadata(tNodes, state) {
         state.editsByXid.get(k).add(what);
     }
 
+    // map for information per xid
     const byXid = new Map();
 
+    /**
+     * creates or retrieves metadata object for a xid
+     * @param xid
+     * @returns {any|null}
+     */
     function entry(xid) {
         const k = String(xid || "");
         if (!k) return null;
@@ -21,16 +33,19 @@ export function collectEditMetadata(tNodes, state) {
         return byXid.get(k);
     }
 
+    // walk through edits inside xydiff nodes
     for (const tNode of tNodes) {
         for (const edit of Array.from(tNode.childNodes || []).filter(n => n.nodeType === 1)) {
+            // handle attribute updates
             if (edit.localName === "au") {
-                const attr = edit.getAttribute("a") || "";
-                const ov = edit.getAttribute("ov") || "";
-                const nv = edit.getAttribute("nv") || "";
-                const xid = edit.getAttribute("xid") || "";
+                const attr = edit.getAttribute("a") || ""; // attribute name
+                const ov = edit.getAttribute("ov") || ""; // old value
+                const nv = edit.getAttribute("nv") || ""; // new value
+                const xid = edit.getAttribute("xid") || ""; // xid
 
                 const e = entry(xid);
 
+                // tracks if xydiff emits old id got a new id
                 if (attr === "id" && e) {
                     e.oldId = ov || null;
                     e.newId = nv || null;
@@ -43,6 +58,7 @@ export function collectEditMetadata(tNodes, state) {
                     markEdit(xid, "id");
                 }
 
+                // stores endpoint change and marks edit type
                 if (attr === "endpoint" && e) {
                     e.oldEndpoint = ov ?? "";
                     e.newEndpoint = nv ?? "";
@@ -55,6 +71,7 @@ export function collectEditMetadata(tNodes, state) {
                 continue;
             }
 
+            // looks for deleted/added label attributes and marks label edit
             if (edit.localName === "ad") {
                 const xid = edit.getAttribute("xid") || "";
                 const a = edit.getAttribute("a") || "";
@@ -63,21 +80,16 @@ export function collectEditMetadata(tNodes, state) {
         }
     }
 
+    // replacement detection
     // XYDiff matched two different calls as one node.
-    // id + endpoint changed on same xid => visualize as delete old + insert new
+    // id + endpoint changed on same xid => visualize as delete old + insert new instead of update
+    // important for faithful visualization as xydiff only matches by xid, has no awareness of CPEE nodes
+    // and may thus match completely unrelated nodes
     for (const [xid, e] of byXid.entries()) {
         if (e.oldId && e.newId && e.oldEndpoint !== undefined) {
             if (!state.replacementByXid) state.replacementByXid = new Map();
 
             state.replacementByXid.set(xid, {
-                oldId: e.oldId,
-                newId: e.newId,
-                oldEndpoint: e.oldEndpoint,
-                newEndpoint: e.newEndpoint
-            });
-
-            console.error("xy replacement, delete old insert new", {
-                xid,
                 oldId: e.oldId,
                 newId: e.newId,
                 oldEndpoint: e.oldEndpoint,

@@ -3,11 +3,14 @@ import {DiffConfig} from '../../../../cpeediff/src/config/DiffConfig.js';
 const getId = (node) =>
     node?.attributes?.get?.('id') ?? null;
 
+/**
+ * match old/new nodes by CPEE id:
+ */
 export class IdAnchorMatcher {
     match(oldRoot, newRoot, matching) {
         if (!DiffConfig.MATCH_ANCHORS?.includes?.('id')) return;
 
-        // extract ids from the new model
+        // build lookup table for new model by extracting ids from the new model
         const newById = new Map();
         for (const v of newRoot.toPreOrderArray()) {
             const id = getId(v);

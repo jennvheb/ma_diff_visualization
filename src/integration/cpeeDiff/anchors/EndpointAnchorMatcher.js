@@ -1,9 +1,9 @@
 import {DiffConfig} from '../../../../cpeediff/src/config/DiffConfig.js';
 
-// given a tree node, try to extract the label (call, parallel_branch, parameters, etc)
+// given a tree node, try to extract the tag (call, manipulate, parallel_branch, parameters, etc)
 export const tagOf = v => (v?.label ?? '').toLowerCase();
 
-// return the endpoint attribute value or null
+// return the attribute value from the CPEE node or null
 export const getAttr = (node, name) => node?.attributes?.get?.(name) ?? null;
 
 // to make matching easier (and prevent mismatches) cast urls to string and trim whitespace
@@ -12,13 +12,14 @@ const normalizeUrl = (s) => {
 };
 
 // if there are n:n same endpoints, use the label as second step to disambiguate, otherwise fall through
+// gateways usually have the label stored as a direct attribute, whereas nodes have labels stored inside parameters
 export function readTaskLabel(node) {
     const a = getAttr(node, 'label');
-   // if (a && String(a).trim()) return String(a).trim();
-    if (a && String(a).trim() && String(a).toLowerCase() !== 'nan') {
+
+    if (a && String(a).trim() && String(a).toLowerCase() !== 'nan') { // ignore invalid labels like 'nan'
         return String(a).trim();
     }
-    for (const p of node?.children ?? []) {
+    for (const p of node?.children ?? []) { // if nothing could be extracted from the label attribute, search the parameters
         if (tagOf(p) !== 'parameters') continue;
         for (const c of p?.children ?? []) {
             if (tagOf(c) === 'label') {
@@ -30,13 +31,16 @@ export function readTaskLabel(node) {
     return null;
 }
 
+/**
+ * matches old/new nodes by endpoint URL
+ */
 export class EndpointAnchorMatcher {
     match(oldRoot, newRoot, matching) {
         if (!DiffConfig.MATCH_ANCHORS?.includes?.('endpoint')) return;
 
         const keyAttr = 'endpoint';
 
-        const collect = (root) => {
+        const collect = (root) => { // collects unmatched nodes in buckets
             const buckets = new Map();
             for (const v of root.toPreOrderArray()) {
                 if (matching.isMatched(v)) continue;

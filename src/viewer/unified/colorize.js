@@ -1,18 +1,17 @@
 import {ghostifyId, idVariants, isGhostId} from "./ids.js";
-import {OP_COLOR, OP_PRIORITY} from "./config.js";
+import {OP_COLOR, OP_PRIORITY, opKey} from "./config.js";
 
-function opKey(op) {
-    return [
-        op.type || "",
-        op.sidOld || "",
-        op.sidNew || "",
-        op.rebasedOldPath || "",
-        op.rebasedNewPath || "",
-        op.oldPath || "",
-        op.newPath || ""
-    ].join("|");
-}
-
+/**
+ * Adds operation metadata to the SVG group
+ * important for the click handler
+ * The strongest click path is:
+ * clicked SVG has data-op-key
+ * -> retrieve exact op
+ * rather than guessing by id
+ *
+ * @param gEl
+ * @param op
+ */
 function stampOpMetadata(gEl, op) {
     if (!gEl || !op) return;
 
@@ -25,6 +24,18 @@ function stampOpMetadata(gEl, op) {
     if (op.rebasedOldPath) gEl.setAttribute("data-old-path", op.rebasedOldPath);
     if (op.rebasedNewPath) gEl.setAttribute("data-new-path", op.rebasedNewPath);
 }
+
+/**
+ * Builds a lookup map:
+ * id -> [SVG elements]
+ * lets colorization find SVG elements even if ids appear as:
+ * a1
+ * ele-a1
+ * __ghost_delete__a1
+ *
+ * @param rootEl
+ * @returns {Map<any, any>}
+ */
 export function buildIdIndex(rootEl) {
     const idx = new Map();
     if (!rootEl) return idx;
@@ -45,16 +56,30 @@ export function buildIdIndex(rootEl) {
     return idx;
 }
 
+/**
+ * Checks whether an SVG element is inside a ghost subtree
+ * used for visual rules
+ *
+ * @param el
+ * @param ghostPrefix
+ * @returns {boolean}
+ */
 function ancestorHasGhost(el, ghostPrefix) {
     if (!el) return false;
     // look up to nearest SVG group container
     const host = el.closest("g.element") || el;
     // check any ancestor g.element with element-id prefix
     const anc = host.closest?.(`g.element[element-id^="${ghostPrefix}"]`);
-    // closest() includes self; exclude self for "inside" check if you want:
+    // closest() includes self; exclude self for "inside" check
     return !!(anc && anc !== host);
 }
 
+/**
+ * Detects whether an SVG group represents a gateway/branch
+ *
+ * @param gEl
+ * @returns {boolean}
+ */
 function isGatewayElementGroup(gEl) {
     const id = gEl?.getAttribute?.("element-id") || "";
     if (id.startsWith("__gw_") || id.startsWith("ele-__gw_")) return true;
@@ -69,6 +94,13 @@ function isGatewayElementGroup(gEl) {
     );
 }
 
+/**
+ * ensures old ghosts have the correct outline
+ *
+ * @param logicalId
+ * @param baseColor
+ * @returns {*|string|null}
+ */
 function ghostStrokeFor(logicalId, baseColor) {
     if (typeof logicalId !== "string") return null;
     if (!logicalId.startsWith("__ghost_")) return null;
@@ -78,6 +110,12 @@ function ghostStrokeFor(logicalId, baseColor) {
     return baseColor; // fallback
 }
 
+/**
+ * Checks if an SVG group itself is an old ghost
+ *
+ * @param gEl
+ * @returns {boolean}
+ */
 function isOldGhostSvgGroup(gEl) {
     const eid = gEl?.getAttribute?.("element-id") || "";
     return (
@@ -88,6 +126,17 @@ function isOldGhostSvgGroup(gEl) {
     );
 }
 
+/**
+ * changes SVG styles
+ * picks the visual shape then applies fill, stroke, opacity, fill-opacity
+ * with special cases for old ghost, gateway, outline-only cases
+ *
+ * @param gEl
+ * @param fillColor
+ * @param opType
+ * @param strokeOverride
+ * @param ctx
+ */
 function colorNodeBody(gEl, fillColor, opType, strokeOverride = null, ctx = {}) {
     if (!gEl) return;
 
@@ -137,11 +186,19 @@ function colorNodeBody(gEl, fillColor, opType, strokeOverride = null, ctx = {}) 
     gEl.classList.add(`op-${opType}`);
 }
 
+/**
+ * finds SVG groups already rendered by the viewer and colors them based on the diff operation
+ *
+ * @param idx
+ * @param metaOps
+ */
 export function colorizeUnified(idx, metaOps) {
+    // sort ops by priority
     const opsSorted = [...metaOps].sort(
         (a, b) => (OP_PRIORITY[a.type] ?? 0) - (OP_PRIORITY[b.type] ?? 0)
     );
 
+    // for each operation, decide which ids to color
     for (const op of opsSorted) {
         const color = OP_COLOR[op.type];
         if (!color) continue;
@@ -161,32 +218,12 @@ export function colorizeUnified(idx, metaOps) {
         }
 
         if (op.type === "update") {
-            console.log("colorize update: op", {
-                sidOld: op.sidOld,
-                sidNew: op.sidNew,
-                oldPath: op.oldPath,
-                rebasedOldPath: op.rebasedOldPath,
-                contentDiff: op.contentDiff
-            });
-        }
-        const lookupId = op.sidNew || op.sidOld;
-        console.log("colorize update: lookupId", lookupId);
-
-        const hits =
-            (idx.get(lookupId) || []).length +
-            (idx.get("ele-" + lookupId) || []).length;
-
-        console.log("colorize update: hits", hits);
-        if (op.type === "update") {
             // updates can color the real node
             const sid = op.sidNew || op.sidOld;
             if (sid) idsToColor.add(sid);
         }
-        if (op.type === "move") console.log("COLOR move", op.sidOld, op.sidNew);
-
 
         if (op.type === "move" || op.type === "moveupdate") {
-            if (op.type === "moveupdate") console.log("COLOR moveupdate", op.sidOld, op.sidNew);
             if (op.sidNew) idsToColor.add(op.sidNew);
             for (const sid of op.subtreeIdsNew || []) idsToColor.add(sid);
             // move ghost exists
@@ -202,9 +239,6 @@ export function colorizeUnified(idx, metaOps) {
 
         for (const logicalId of idsToColor) {
             const els = idx.get(logicalId) || [];
-            if (op.type === "move" && String(logicalId).startsWith("__ghost_move__")) {
-                console.log("MOVE lookup", logicalId, "hits", (idx.get(logicalId) || []).length);
-            }
 
             for (const el of els) {
                 const g = el.closest("g.element") || el.closest("g") || el;

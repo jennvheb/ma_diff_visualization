@@ -16,6 +16,21 @@ function configureDiff({ anchors = ["id", "endpoint", "label"], mode = "balanced
     DiffConfig.PRETTY_XML = pretty;
 }
 
+/**
+ * this is the central pipeline: takes old model, new model, algorithm choice and settings to return oldTreeXml, newTreeXml, diffSource, diffOps, rawDiffXml used by both the CLI and server
+ * as it is used by both main.js (used locally) and server.js, it accepts either: oldXmlString + newXmlString or oldFilePath + newFilePath
+ * @param algo
+ * @param oldXmlString
+ * @param newXmlString
+ * @param oldFilePath
+ * @param newFilePath
+ * @param rawPassthrough
+ * @param anchors
+ * @param mode
+ * @param pretty
+ * @param xydiffBinaryPath
+ * @returns {Promise<{newTreeXml: String, diffOps: {path: string, payloadTag, payloadText, payloadXml, oldPath: (string|null), from: string, id: (*|string|null), type: *, newPath: (string|null)}[], rawDiffXml: String, diffSource: string, oldTreeXml: String}|{newTreeXml: string, diffOps: ([]|*[]), rawDiffXml: string, diffSource: string, oldTreeXml: string}|{newTreeXml: string, diffOps: *[], rawDiffXml: string, diffSource: string, oldTreeXml: string}>}
+ */
 export async function computeDiffState({
                                            algo,
                                            oldXmlString = null,
@@ -85,7 +100,7 @@ export async function computeDiffState({
             throw new Error("computeDiffState(xydiff): missing xydiffBinaryPath");
         }
 
-        const { output, workDir, oldFile, newFile } = runXyDiffBinary({
+        const { output, workDir, oldFile, newFile, cleanupWorkDir } = runXyDiffBinary({
             binaryPath: xydiffBinaryPath,
             oldTreeXmlString,
             newTreeXmlString,
@@ -101,7 +116,7 @@ export async function computeDiffState({
                     rawDiffXml: output
                 };
             }
-
+            // xydiff does not naturally output the same format as CpeeDiff so it needs to be converted
             const deltaXml = parseXyDiffToDelta(output, workDir);
             const opsJson = deltaXmlToOps(deltaXml);
 
@@ -114,13 +129,17 @@ export async function computeDiffState({
             };
         } finally {
             try {
-                for (const f of [
-                    oldFile,
-                    newFile,
-                    path.join(workDir, "old.xml.xidmap"),
-                    path.join(workDir, "new.xml.xidmap"),
-                ]) {
-                    if (f && fs.existsSync(f)) fs.unlinkSync(f);
+                if (cleanupWorkDir && workDir && fs.existsSync(workDir)) {
+                    fs.rmSync(workDir, { recursive: true, force: true });
+                } else {
+                    for (const f of [
+                        oldFile,
+                        newFile,
+                        path.join(workDir, "old.xml.xidmap"),
+                        path.join(workDir, "new.xml.xidmap"),
+                    ]) {
+                        if (f && fs.existsSync(f)) fs.unlinkSync(f);
+                    }
                 }
             } catch {
                 // ignore cleanup failures

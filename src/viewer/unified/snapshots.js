@@ -1,5 +1,11 @@
 import {isGatewayTagName, tagName} from "../../integration/stableIds.js";
 
+/**
+ * Returns attributes except helper ids
+ *
+ * @param el
+ * @returns {{}}
+ */
 function cleanAttrs(el) {
     const out = {};
     if (!el || el.nodeType !== 1) return out;
@@ -11,6 +17,12 @@ function cleanAttrs(el) {
     return out;
 }
 
+/**
+ * Returns normalized text content, capped at 200 chars
+ * Used for quick comparison
+ * @param el
+ * @returns {string|string}
+ */
 function textSig(el) {
     if (!el || el.nodeType !== 1) return "";
     const t = (el.textContent || "").replace(/\s+/g, " ").trim();
@@ -18,7 +30,13 @@ function textSig(el) {
 }
 
 
-// used for gateway updates (conditions, scripts, etc.)
+/**
+ * used for gateway updates (conditions, scripts, etc.)
+ * useful for detecting gateway changes like branch structure or condition changes
+ *
+ * @param el
+ * @returns {{childTags: *[], tag: *, id: (*|string|null), text: string, attrs: {}}|null}
+ */
 function nodeSummary(el) {
     if (!el || el.nodeType !== 1) return null;
     const tag = tagName(el);
@@ -36,7 +54,14 @@ function nodeSummary(el) {
     };
 }
 
-// Used for task updates (call/manipulate/stop)
+/**
+ * Used for task updates (call/manipulate/stop)
+ * extracts meaningful CPEE fields
+ * So a task update can be explained more meaningfully
+ *
+ * @param el
+ * @returns {{endpoint: (*|string), notes: *, method: *, arguments: *, tag: *, id: (*|string|null), label: *, text: string, parameters: *, script: (*|null), attrs: {}}|null}
+ */
 function taskSummary(el) {
     if (!el || el.nodeType !== 1) return null;
 
@@ -74,13 +99,17 @@ function taskSummary(el) {
 
         script: codeText || finalizeText || null,
         notes: notesText,
-        // customization: customizationText,
-        // annotations: annotationsText,
 
         text: textSig(el),
     };
 }
 
+/**
+ * Chooses the correct summary type
+ *
+ * @param node
+ * @returns {{endpoint: (*|string), notes: *, method: *, arguments: *, tag: *, id: (*|string|null), label: *, text: string, parameters: *, script: (*|null), attrs: {}}|null|{childTags: *[], tag: *, id: (*|string|null), text: string, attrs: {}}}
+ */
 export function snapshotForNode(node) {
     if (!node) return null;
     const t = tagName(node);
@@ -89,6 +118,15 @@ export function snapshotForNode(node) {
     return null;
 }
 
+/**
+ * Compares two snapshots
+ * detects if change is meaningful
+ * filters noise
+ *
+ * @param oldS
+ * @param newS
+ * @returns {{new, kind: string}|{notesChanged: boolean, attrChanges: *[], labelChanged: boolean, scriptChanged: boolean, textChanged: boolean, childTagsChanged: boolean, endpointChanged: boolean, parametersChanged: boolean}|{kind: string, old}|null}
+ */
 export function diffSummaries(oldS, newS) {
     if (!oldS && !newS) return null;
     if (!oldS) return { kind: "added", new: newS };
@@ -116,11 +154,6 @@ export function diffSummaries(oldS, newS) {
     const notesChanged =
         (oldS.notes ?? null) !== (newS.notes ?? null);
 
-    //   const customizationChanged =
-    //       (oldS.customization ?? null) !== (newS.customization ?? null);
-
-    //   const annotationsChanged =
-    //       (oldS.annotations ?? null) !== (newS.annotations ?? null);
     return {
         attrChanges,
         childTagsChanged,
@@ -129,9 +162,7 @@ export function diffSummaries(oldS, newS) {
         endpointChanged,
         scriptChanged,
         parametersChanged,
-        notesChanged,
-        //    customizationChanged,
-        //    annotationsChanged,
+        notesChanged
     };
 }
 

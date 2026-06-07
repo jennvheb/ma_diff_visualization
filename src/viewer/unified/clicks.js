@@ -1,17 +1,14 @@
 import {idVariants, normalizeElementId} from "./ids.js";
+import {opKey} from "./config.js";
 
-export function opKey(op) {
-    return [
-        op.type || "",
-        op.sidOld || "",
-        op.sidNew || "",
-        op.rebasedOldPath || "",
-        op.rebasedNewPath || "",
-        op.oldPath || "",
-        op.newPath || ""
-    ].join("|");
-}
-
+/**
+ * Builds opKey -> op
+ * If colorize stamped data-op-key
+ * click handler can retrieve exact operation
+ *
+ * @param metaOps
+ * @returns {Map<any, any>}
+ */
 export function buildOpsByKey(metaOps) {
     const m = new Map();
     for (const op of metaOps || []) {
@@ -20,6 +17,14 @@ export function buildOpsByKey(metaOps) {
     return m;
 }
 
+/**
+ * fallback lookup
+ * Builds id -> [ops]
+ * using direct operation ids: sidOld, sidNew, selfOldId, mergeOwnerId, id
+ *
+ * @param metaOps
+ * @returns {Map<any, any>}
+ */
 export function buildOpsByIdDirect(metaOps) {
     const m = new Map();
     function add(id, op) {
@@ -39,6 +44,15 @@ export function buildOpsByIdDirect(metaOps) {
     return m;
 }
 
+/**
+ * Builds id -> [ops]
+ * using region/subtree ids: sidOld, sidNew, subtreeIdsOld, subtreeIdsNew
+ * broader lookup
+ * If user clicks a child inside a changed subtree, direct lookup might fail, but region lookup can still find the parent operation
+ *
+ * @param metaOps
+ * @returns {Map<any, any>}
+ */
 export function buildOpsByIdRegion(metaOps) {
     const m = new Map();
     function add(id, op) {
@@ -59,6 +73,12 @@ export function buildOpsByIdRegion(metaOps) {
     return m;
 }
 
+/**
+ * Removes duplicate ops by opKey
+ *
+ * @param ops
+ * @returns {*[]}
+ */
 function dedupeOps(ops) {
     const seen = new Set();
     const out = [];
@@ -71,6 +91,13 @@ function dedupeOps(ops) {
     return out;
 }
 
+/**
+ * Given an SVG group, collects all nested g.element[element-id] ids
+ * Used for region fallback
+ *
+ * @param gEl
+ * @returns {*[]}
+ */
 function collectDescendantElementIdsFromSvg(gEl) {
     const out = [];
     if (!gEl) return out;
@@ -82,6 +109,14 @@ function collectDescendantElementIdsFromSvg(gEl) {
     return out;
 }
 
+/**
+ * Creates the payload sent to undo UI
+ * This payload is what undoController receives
+ *
+ * @param clickedId
+ * @param opsForId
+ * @returns {{clickedId, updates: {sidNew, contentNew, subtreeIdsOld, realizeParentPath, rebasedNewPath, subtreeIdsNew, sidOld, oldPath, contentOld, type: *, opKey: string, realizeIndex: *|null, contentDiff, selfOldId, mergeOwnerId, rebasedOldPath, newPath}[]}}
+ */
 function buildClickPayload(clickedId, opsForId) {
     const interesting = opsForId || [];
     return {
@@ -112,6 +147,14 @@ function buildClickPayload(clickedId, opsForId) {
         })),
     };
 }
+
+/**
+ * Removes visual prefixes
+ * Used so ghost clicks can map back to the real operation id
+ *
+ * @param id
+ * @returns {*|string}
+ */
 function unwrapGhostId(id) {
     if (!id || typeof id !== "string") return id;
     return id
@@ -119,13 +162,22 @@ function unwrapGhostId(id) {
         .replace(/^__ghost_delete__/, "")
         .replace(/^__ghost_move__/, "");
 }
+
+/**
+ * installs click handlers on:
+ * #layout-new
+ * #graph-new
+ *
+ * @param opsByIdDirect
+ * @param opsByIdRegion
+ * @param opsByKey
+ */
 export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsByKey }) {
     const layout = document.getElementById("layout-new");
-    const svg = document.getElementById("graph-new");
-    if (!layout && !svg) return;
+    if (!layout) return;
 
     const handler = (e) => {
-        const hit = e.target.closest?.("[element-id], [data-op-key]");
+        const hit = e.target.closest?.("[element-id], [data-op-key]"); // find clicked visual element
         if (!hit) {
             window.dispatchEvent(new CustomEvent("diff-element-empty-click"));
             return;
@@ -135,7 +187,7 @@ export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsBy
         e.stopPropagation();
         e.stopImmediatePropagation?.();
 
-        // strongest path: exact op stamped onto the visual element
+        // exact op-key lookup
         const stampedKey =
             hit.getAttribute("data-op-key") ||
             hit.closest?.("[data-op-key]")?.getAttribute("data-op-key") ||
@@ -158,7 +210,7 @@ export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsBy
 
             clickedId = normalizeElementId(rawClicked);
             const baseClickedId = unwrapGhostId(clickedId);
-
+            // try several variants against ops index
             opsForId = []
                 .concat(opsByIdDirect.get(rawClicked) || [])
                 .concat(opsByIdDirect.get(clickedId) || [])
@@ -189,7 +241,7 @@ export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsBy
                 }
             }
         }
-
+        // ghost filtering: if user clicked delete ghost, prefer exact delete ops for that node
         opsForId = dedupeOps(opsForId);
         if (clickedId.startsWith("__ghost_delete__")) {
             const wanted = unwrapGhostId(clickedId);
@@ -198,7 +250,7 @@ export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsBy
             );
             if (exactDelete.length) opsForId = exactDelete;
         }
-
+        // if user clicked move ghost, prefer exact move/moveupdate ops for that node
         if (clickedId.startsWith("__ghost_move__")) {
             const wanted = unwrapGhostId(clickedId);
             const exactMove = opsForId.filter(op =>
@@ -211,17 +263,13 @@ export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsBy
             window.dispatchEvent(new CustomEvent("diff-element-empty-click"));
             return;
         }
-        console.log("clicks: clickedId", clickedId, "resolved ops", opsForId);
-        console.log("clicks: first resolved op JSON", JSON.stringify(opsForId?.[0] || null, null, 2));
         const payload = buildClickPayload(clickedId, opsForId);
-
-        console.log("click payload", payload);
-
+        // send payload
         window.parent?.postMessage({
             type: "DIFF_ELEMENT_CLICK",
             payload
         }, "*");
-
+        // send payload
         window.dispatchEvent(new CustomEvent("diff-element-click", { detail: payload }));
     };
 
@@ -232,14 +280,5 @@ export function installUnifiedClickHandler({ opsByIdDirect, opsByIdRegion, opsBy
         layout.__unifiedClickHandler = handler;
         layout.__unifiedClickInstalled = true;
         layout.addEventListener("click", handler, true);
-    }
-
-    if (svg) {
-        if (svg.__unifiedClickHandler) {
-            svg.removeEventListener("click", svg.__unifiedClickHandler, true);
-        }
-        svg.__unifiedClickHandler = handler;
-        svg.__unifiedClickInstalled = true;
-        svg.addEventListener("click", handler, true);
     }
 }

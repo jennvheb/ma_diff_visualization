@@ -2,6 +2,7 @@ const {DOMParser, XMLSerializer} = await import("@xmldom/xmldom");
 import {stampLogicalIds} from "../stableIds.js";
 import fs from "fs";
 import path from "node:path";
+import os from "node:os";
 import {execFileSync} from "node:child_process";
 
 
@@ -26,14 +27,20 @@ export function findDslRoot(doc) {
     return last;
 }
 
+/**
+ * prepares XML before sending it to XYDiff
+ *
+ * @param xmlString
+ * @returns {*}
+ */
 export function projectForXyDiff(xmlString) {
-    const doc = new DOMParser().parseFromString(xmlString, "text/xml");
-    const root = findDslRoot(doc) || doc.documentElement;
+    const doc = new DOMParser().parseFromString(xmlString, "text/xml"); // turns xml string into DOM tree
+    const root = findDslRoot(doc) || doc.documentElement; // find CPEE root or document root as fallback
 
     // useful for real task ids and viewer consistency
-    stampLogicalIds(root);
+    stampLogicalIds(root); // adds stable synthetic ids to gateways/drawable elements that do not have real ids
 
-    return new XMLSerializer().serializeToString(doc);
+    return new XMLSerializer().serializeToString(doc); // converts the modified DOM back into XML text which is what xydiff actually compares
 }
 
 export function loadDom(filePath) {
@@ -41,25 +48,24 @@ export function loadDom(filePath) {
     return new DOMParser().parseFromString(xml, "text/xml");
 }
 
+/**
+ * execution wrapper around the external XYDiff binary
+ * the actual binary runner
+ *
+ * @param binaryPath
+ * @param oldTreeXmlString
+ * @param newTreeXmlString
+ * @returns {{output: string, oldFile: *, newFile: *, cleanupWorkDir: boolean, workDir: string}}
+ */
 export function runXyDiffBinary({ binaryPath, oldTreeXmlString, newTreeXmlString }) {
-    const workDir = path.dirname(binaryPath);
+    const binaryDir = path.dirname(binaryPath);
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "xydiff-"));
 
     const oldFile     = path.join(workDir, "old.xml");
     const newFile     = path.join(workDir, "new.xml");
-    const oldOrigFile = path.join(workDir, "old.orig.xml");
-    const newOrigFile = path.join(workDir, "new.orig.xml");
 
-    // cleanup old xidmaps
-    for (const f of ["old.xml.xidmap", "new.xml.xidmap"]) {
-        const p = path.join(workDir, f);
-        if (fs.existsSync(p)) fs.unlinkSync(p);
-    }
 
-    // write originals
-    fs.writeFileSync(oldOrigFile, oldTreeXmlString, "utf8");
-    fs.writeFileSync(newOrigFile, newTreeXmlString, "utf8");
-
-    // project + stabilize BEFORE diff
+    // project + stabilize BEFORE diff, stamps gateway/stable ids into both models for stabilization
     let oldProj = projectForXyDiff(oldTreeXmlString);
     let newProj = projectForXyDiff(newTreeXmlString);
 
@@ -68,12 +74,12 @@ export function runXyDiffBinary({ binaryPath, oldTreeXmlString, newTreeXmlString
     fs.writeFileSync(oldFile, oldProj, "utf8");
     fs.writeFileSync(newFile, newProj, "utf8");
 
-    // run xydiff
+    // run xydiff, output is the raw XYDiff XML/string result
     const output = execFileSync(binaryPath, [oldFile, newFile], {
         cwd: workDir,
-        env: { ...process.env, DYLD_LIBRARY_PATH: workDir },
+        env: { ...process.env, DYLD_LIBRARY_PATH: binaryDir },
         encoding: "utf8",
     });
 
-    return { output, workDir, oldFile, newFile, oldOrigFile, newOrigFile };
+    return { output, workDir, oldFile, newFile, cleanupWorkDir: true};
 }

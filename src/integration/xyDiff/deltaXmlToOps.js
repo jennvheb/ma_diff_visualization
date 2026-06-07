@@ -17,8 +17,6 @@ export function deltaXmlToOps(deltaXmlString) {
         if (tag === "insert") {
             const newPath = n.getAttribute("newPath");
             if (!newPath) continue;
-            console.error("[XY INSERT NODE ATTRS]", Array.from(n.attributes).map(a => `${a.name}=${a.value}`));
-
 
             const op = {
                 type: "insert",
@@ -58,7 +56,6 @@ export function deltaXmlToOps(deltaXmlString) {
             if (!oldPath || !newPath) continue;
 
             // detect nested update payload (runner emits <move> ... <update> ... </move>)
-            // FIXME
             let hasUpdateChild = false;
             for (let j = 0; j < n.childNodes.length; j++) {
                 const c = n.childNodes[j];

@@ -27,3 +27,20 @@ export function lastSeg(pathStr) {
     return segs.length ? segs[segs.length - 1] : null;
 }
 
+/**
+ * creates operation key to stamp SVG group
+ * used so clicks can later recover operation not only by id which may be ambiguous
+ * @param op
+ * @returns {string}
+ */
+export function opKey(op) {
+    return [
+        op.type || "",
+        op.sidOld || "",
+        op.sidNew || "",
+        op.rebasedOldPath || "",
+        op.rebasedNewPath || "",
+        op.oldPath || "",
+        op.newPath || ""
+    ].join("|");
+}

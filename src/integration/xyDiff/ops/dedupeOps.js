@@ -1,4 +1,10 @@
-// remove duplicate ops from the diff
+/**
+ * remove duplicate operations from the diff to keep the visualization clean from noise
+ * xydiff emits many operations for one edit
+ *
+ * @param ops
+ * @returns {*[]}
+ */
 export function dedupeOps(ops) {
     const seen = new Set();
     const out = [];

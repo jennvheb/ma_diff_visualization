@@ -1,3 +1,9 @@
+/**
+ * used in undo popover
+ *
+ * @param op
+ * @returns {string}
+ */
 function describeOp(op) {
     const id = op.sidNew || op.sidOld || "(no id)";
     if (op.type === "insert") return `Insert ${id}`;
@@ -8,6 +14,13 @@ function describeOp(op) {
     return `${op.type} ${id}`;
 }
 
+/**
+ * creates a stable string identifying an operation
+ * used to track/distinguish operations
+ *
+ * @param op
+ * @returns {string}
+ */
 function undoKey(op) {
     const oldP = op.rebasedOldPath || op.oldPath || "";
     const newP = op.rebasedNewPath || op.newPath || "";
@@ -16,6 +29,14 @@ function undoKey(op) {
     return `${op.type}|${id}|${oldP}|${newP}`;
 }
 
+/**
+ * When several operations are associated with the clicked visual element, this scores which one is most likely intended
+ * used in subtrees
+ *
+ * @param op
+ * @param clickedId
+ * @returns {number}
+ */
 function scoreOpForClickedId(op, clickedId) {
     let score = 0;
     if (!clickedId || !op) return score;
@@ -33,7 +54,14 @@ function scoreOpForClickedId(op, clickedId) {
 }
 
 
-
+/**
+ * Checks whether two operations refer to the same logical node by comparing ids
+ * Used to detect related insert/delete pairs.
+ *
+ * @param a
+ * @param b
+ * @returns {boolean}
+ */
 function sameLogicalNode(a, b) {
     if (!a || !b) return false;
 
@@ -56,11 +84,30 @@ function sameLogicalNode(a, b) {
     return aIds.some(id => bIds.includes(id));
 }
 
+/**
+ * Checks whether two id arrays share at least one id
+ * Used for subtree overlap
+ * Needed because it gives an indication two operations are related, even among moved/deleted edits in the area
+ *
+ * @param a
+ * @param b
+ * @returns {boolean}
+ */
 function intersects(a = [], b = []) {
     const set = new Set((a || []).filter(Boolean));
     return (b || []).some(x => x && set.has(x));
 }
 
+/**
+ * If selected op is an insert, try to find matching delete
+ * If selected op is a delete, try to find matching insert
+ * -> handles replacement-like changes: delete old node + insert new node
+ * If they refer to same logical/subtree ids, undo should undo both together
+ *
+ * @param op
+ * @param allOps
+ * @returns {*|null}
+ */
 function findReplacementPair(op, allOps = []) {
     if (!op) return null;
 
@@ -82,10 +129,30 @@ function findReplacementPair(op, allOps = []) {
     }) || null;
 }
 
+/**
+ * Expands one selected visual op into one or more actual undo operations
+ * needed for move+update, delete+insert
+ *
+ * @param op
+ * @param allOps
+ * @returns {(*)[]|[(*&{type: string}),(*&{type: string})]|*[]}
+ */
 function expandUndoOps(op, allOps = []) {
     if (!op) return [];
 
     if (op.type === "moveupdate") {
+        // A real moveupdate should normally refer to the same logical node.
+        // If old/new ids differ, do NOT split it into update + move
+        if (
+            op.sidOld &&
+            op.sidNew &&
+            op.sidOld !== op.sidNew &&
+            !String(op.sidOld).startsWith("__gw_") &&
+            !String(op.sidNew).startsWith("__gw_")
+        ) {
+            return [op];
+        }
+
         if (op.updateOp && op.moveOp) {
             return [op.updateOp, op.moveOp];
         }
@@ -108,7 +175,13 @@ function expandUndoOps(op, allOps = []) {
     return [op];
 }
 
-
+/**
+ * sends only the fields needed for undo to the host
+ * also fills fallback subtree id arrays if missing
+ *
+ * @param op
+ * @returns {{sidNew: (*|null), subtreeIdsOld: (*[]|*[]), realizeParentPath: (*|null), subtreeIdsNew: (*[]|*[]), sidOld: (*|null), type, realizeBeforeId: null, path: null, realizeIndex: (*|null), mergeOwnerPath: (string|*|null), contentDiff: (*|null), mergeOwnerId: (*|null), id: null, newPath: null, realizeReplacesPath: null, payloadTag: (string|*|null), contentNew: (*|null), rebasedNewPath: (*|null), payloadText: (string|*), payloadXml: (string|*), realizeAfterId: null, oldPath: null, contentOld: (*|null), opKey: (*|null), selfOldId: (*|null), undoKey: (string|*|string), rebasedOldPath: (*|null)}}
+ */
 function toUndoPayloadOp(op) {
     return {
         opKey: op.opKey || null,
@@ -128,7 +201,8 @@ function toUndoPayloadOp(op) {
 
         sidOld: op.sidOld || null,
         sidNew: op.sidNew || null,
-        selfOldId: op.selfOldId || op.sidOld || op.sidNew || op.id || null,        mergeOwnerId: op.mergeOwnerId || null,
+        selfOldId: op.selfOldId || op.sidOld || op.sidNew || op.id || null,
+        mergeOwnerId: op.mergeOwnerId || null,
         mergeOwnerPath: op.mergeOwnerPath || null,
 
         payloadTag: op.payloadTag || null,
@@ -151,17 +225,25 @@ function toUndoPayloadOp(op) {
         contentDiff: op.contentDiff ? structuredClone(op.contentDiff) : null
     };
 }
+
+/**
+ * wires the UI to events
+ *
+ * @returns {{hide: hide, showForPayload: showForPayload}}
+ */
 export function installUndoController() {
+    // Gets DOM elements
     const pop = document.getElementById("undo-popover");
     const body = document.getElementById("undo-popover-body");
     const undoBtn = document.getElementById("undo-btn");
     const cancelBtn = document.getElementById("undo-cancel-btn");
-
+    // Internal state
     const state = {
         selectedPayload: null,
         selectedOp: null,
     };
 
+    // Closes the popover and clears selection
     function hide() {
         if (pop) pop.hidden = true;
         state.selectedPayload = null;
@@ -169,6 +251,12 @@ export function installUndoController() {
         if (body) body.innerHTML = "";
     }
 
+    /**
+     * Receives clicked diff payload, hide if no updates
+     * otherwise store payload, choose the best op based on clicked id, render ops into popover and show popover
+     *
+     * @param payload
+     */
     function showForPayload(payload) {
         if (!payload?.updates?.length || !pop || !body) {
             hide();
@@ -216,22 +304,12 @@ export function installUndoController() {
             window.ALL_DIFF_OPS || state.selectedPayload?.updates || []
         );
 
-        console.log("UNDO expanded ops", expanded.map(o => ({
-            type: o.type,
-            sidOld: o.sidOld,
-            sidNew: o.sidNew,
-            oldPath: o.oldPath,
-            newPath: o.newPath,
-            rebasedOldPath: o.rebasedOldPath,
-            rebasedNewPath: o.rebasedNewPath
-        })));
-
         const msg = {
             type: "UNDO_REQUEST",
             ops: expanded.map(toUndoPayloadOp)
         };
 
-        console.log("UNDO sending request", msg);
+        // supports both external host and local mockHost
         window.parent?.postMessage(msg, "*");
         window.dispatchEvent(new CustomEvent("undo-request", { detail: msg }));
     });

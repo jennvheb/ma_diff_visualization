@@ -1,9 +1,16 @@
-// oldPath is in the dynamic tree after ops[0..opIndex-1].
-// Rewind previous edits so it points into the original OLD tree.
 import {nearestDrawable} from "../../integration/stableIds.js";
 import {toSegs} from "./config.js";
 import {nodeAtPath} from "./xml.js";
 
+/**
+ * oldPath is in the dynamic tree at at operation opIndex
+ * Rewind previous edits so it points into the original OLD tree
+ *
+ * @param oldPath
+ * @param opIndex
+ * @param ops
+ * @returns {*|string}
+ */
 export function rebaseOldPathDynamicToStatic(oldPath, opIndex, ops) {
     if (!oldPath) return oldPath;
     let segs = toSegs(oldPath);
@@ -57,8 +64,15 @@ export function rebaseOldPathDynamicToStatic(oldPath, opIndex, ops) {
     return "/" + segs.join("/");
 }
 
-// newPath is in the dynamic tree after opIndex.
-// Push it forward through later ops so it points into the final NEW tree
+/**
+ * newPath is in the dynamic tree after opIndex
+ * Push it forward through later operations so it points into final NEW
+ *
+ * @param newPath
+ * @param opIndex
+ * @param ops
+ * @returns {*|string}
+ */
 export function rebaseNewPathDynamicToFinal(newPath, opIndex, ops) {
     if (!newPath) return newPath;
     let segs = toSegs(newPath);
@@ -101,6 +115,16 @@ export function rebaseNewPathDynamicToFinal(newPath, opIndex, ops) {
     return "/" + segs.join("/");
 }
 
+/**
+ * Chooses whether to trust the raw old path or the rebased old path
+ * safety function because not every CpeeDiff path behaves the same
+ *
+ * @param op
+ * @param idx
+ * @param ops
+ * @param oldRoot
+ * @returns {*|string|null}
+ */
 export function preferStaticOldPath(op, idx, ops, oldRoot) {
     if (!op.oldPath) return null;
 
@@ -124,14 +148,13 @@ export function preferStaticOldPath(op, idx, ops, oldRoot) {
     return op.oldPath;
 }
 
-
-/*
-Mark move ops that were "inserted-then-moved" so we can skip OLD move ghosts
-(Coloring stays correct: move still overrides insert due to OP_PRIORITY.)
-AND
-Mark move ops that should NOT create a standalone OLD move ghost.
-- insertedThenMoved: no meaningful old-side ghost
-- coveredByAncestorMoveGhost: old-side ghost already exists inside ancestor move ghost
+/**
+ * Returns true if ancestorPath is above childPath
+ * Used later to suppress nested ghost/move operations when an ancestor already covers them
+ *
+ * @param ancestorPath
+ * @param childPath
+ * @returns {boolean}
  */
 export function isStrictAncestorPath(ancestorPath, childPath) {
     const a = toSegs(ancestorPath || "");

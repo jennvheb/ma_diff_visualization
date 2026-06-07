@@ -1,6 +1,9 @@
 import {DiffConfig} from '../../../../cpeediff/src/config/DiffConfig.js';
 import {tagOf, getAttr, readTaskLabel} from "./EndpointAnchorMatcher.js";
 
+/**
+ * match old/new nodes by visible task label
+ */
 export class LabelAnchorMatcher {
     match(oldRoot, newRoot, matching) {
         if (!DiffConfig.MATCH_ANCHORS?.includes?.('label')) return;

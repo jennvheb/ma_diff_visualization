@@ -15,6 +15,13 @@ export function getDrawableId(el) {
     return id ? String(id) : null;
 }
 
+/**
+ * builds a guard id signature by using tag, label, endpoint
+ * used to prevent id-reuse mistakes
+ *
+ * @param el
+ * @returns {string|null}
+ */
 export function drawableGuardSignature(el) {
     if (!el || el.nodeType !== 1) return null;
     const tag = tagName(el);
@@ -25,13 +32,27 @@ export function drawableGuardSignature(el) {
     return `g:${tag}|lbl:${labelAttr}|ep:${ep}`;
 }
 
+function cpeeLabelText(el) {
+    const hit = el?.querySelector?.("parameters > label");
+    return hit ? String(hit.textContent || "").replace(/\s+/g, " ").trim() : "";
+}
+
+
+/**
+ * creates a matching signature for a drawable element at a path
+ * used when a node needs to be relocated in the other tree
+ *
+ * @param baseElem
+ * @param relPath
+ * @returns {string|null}
+ */
 export function signatureForDrawable(baseElem, relPath) {
     const el = drawableElAt(baseElem, relPath);
     if (!el) return null;
 
     const tag = (el.localName || el.tagName || "").toLowerCase();
     const id = el.getAttribute?.("id") || "";
-    const label = el.getAttribute?.("label") || "";
+    const label = cpeeLabelText(el) || el.getAttribute?.("label") || "";
     const ep = endpointText(el);
 
     // only treat REAL ids as stable
@@ -58,8 +79,16 @@ function isSyntheticGatewayId(id) {
     return typeof id === "string" && id.startsWith("__gw_");
 }
 
-// if an id is reused, guard signature will differ and null is returned
-// FIXME
+/**
+ * uses id to find the corresponding new drawable
+ * but only returns the match if guard signatures are equal
+ * protects against id reuse
+ * important for cases where the same id exists but the node is not the same semantic element
+ *
+ * @param oldDrawableEl
+ * @param newById
+ * @returns {*|null}
+ */
 export function mapOldDrawableToNew(oldDrawableEl, newById) {
     const id = getDrawableId(oldDrawableEl);
     if (!id) return null;
@@ -73,6 +102,13 @@ export function mapOldDrawableToNew(oldDrawableEl, newById) {
     return (gOld && gNew && gOld === gNew) ? hit : null;
 }
 
+/**
+ * finds a drawable path in a tree by signature
+ * useful when paths changed but signatures still identify the element
+ * @param baseElem
+ * @param sig
+ * @returns {string|null}
+ */
 export function findDrawableRelPathBySignature(baseElem, sig) {
     if (!baseElem || !sig) return null;
 

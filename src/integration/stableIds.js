@@ -14,6 +14,13 @@ export function hash32(str) {
     return (h >>> 0).toString(16);
 }
 
+/**
+ * checks whether a tag is gateway/branch like
+ * not just parallel, choose, loop but also branch containers
+ *
+ * @param tag
+ * @returns {boolean}
+ */
 export function isGatewayTagName(tag) {
     return GATEWAY_TAGS.has((tag || "").toLowerCase()) || BRANCH_CONTAINER_TAGS.has((tag || "").toLowerCase());
 }
@@ -25,6 +32,12 @@ export function isRealTaskId(id) {
         && !id.startsWith("__ghost_");
 }
 
+/**
+ * checks the xml element if it is a real drawable task and has a real task id
+ *
+ * @param el
+ * @returns {*|boolean}
+ */
 export function isRealTaskDrawable(el) {
     if (!el || el.nodeType !== 1) return false;
     const t = tagName(el);
@@ -43,6 +56,16 @@ function elementChildren(node) {
     return out;
 }
 
+/**
+ * returns the index of a node among siblings with the same tag
+ * e.g.:
+ * <parallel/>
+ * <call/>
+ * <parallel/>
+ * the second <parallel> has index 1 among parallel siblings
+ * @param node
+ * @returns {number}
+ */
 export function stableIdxAmongSameTag(node) {
     if (!node?.parentNode) return 0;
     const t = tagName(node);
@@ -57,7 +80,15 @@ export function stableIdxAmongSameTag(node) {
     return 0;
 }
 
-// BFS for “nearby” tasks
+/**
+ * breadth-first search below a gateway and returns the first k real task ids
+ * used as witness information for gateway identity
+ * if a gateway contains the same nearby tasks, it is probably the same gateway
+ *
+ * @param node
+ * @param k
+ * @returns {*[]}
+ */
 export function firstKRealTaskIds(node, k = 3) {
     const out = [];
     if (!node || node.nodeType !== 1) return out;
@@ -73,7 +104,12 @@ export function firstKRealTaskIds(node, k = 3) {
     return out;
 }
 
-// Manual descendant walk (no querySelectorAll)
+/**
+ * manual descendant walk (no querySelectorAll)
+ *
+ * @param node
+ * @param fn
+ */
 function walkDesc(node, fn) {
     if (!node || node.nodeType !== 1) return;
     fn(node);
@@ -81,6 +117,13 @@ function walkDesc(node, fn) {
     for (const c of kids) walkDesc(c, fn);
 }
 
+/**
+ * creates a fallback signature for a gateway based on gateway tag, direct child tags and number of drawable node descendants
+ * used when a gateway has no real task witnesses
+ *
+ * @param gwEl
+ * @returns {string}
+ */
 export function gatewayStructureSig(gwEl) {
     if (!gwEl || gwEl.nodeType !== 1) return "";
     const t = tagName(gwEl);
@@ -98,24 +141,41 @@ export function gatewayStructureSig(gwEl) {
     return `${t}::${childTags}::c${counts.call}-m${counts.manipulate}-s${counts.stop}`;
 }
 
+/**
+ * creates the synthetic id for a gateway
+ *
+ * @param node
+ * @param parentDrawableId
+ * @returns {string}
+ */
 export function stableGatewayId(node, parentDrawableId) {
     const t = tagName(node);
     const pid = parentDrawableId || "root";
 
+    // priority 1: use nearby real tasks as witnesses
     const witnesses = firstKRealTaskIds(node, 3);
     if (witnesses.length) {
         return `__gw_${t}__${pid}__w_${hash32(witnesses.join("|"))}`;
     }
 
+    // fallback 1: use structure signature
     const s = gatewayStructureSig(node);
     if (s) {
         return `__gw_${t}__${pid}__s_${hash32(s)}`;
     }
 
+    // fallback 2: use order among same tag
     const ord = stableIdxAmongSameTag(node);
     return `__gw_${t}__${pid}__o_${ord}`;
 }
 
+/**
+ * walk upwards from a node to find the nearest ancestor that is drawable
+ * used for when the edits are deeply nested as the node is colored not the nested info
+ * or to know the parent context when assigning synthetic ids
+ * @param node
+ * @returns {*|null}
+ */
 export function nearestDrawable(node) {
     let cur = node;
     while (cur && cur.nodeType === 1) {
@@ -126,9 +186,9 @@ export function nearestDrawable(node) {
 }
 
 /**
- * Stamps stable ids onto gateways and onto any drawable lacking id.
- * - Keeps real task ids as-is.
- * - Assigns stable ids to gateways.
+ * walks the xml tree and stamps stable ids onto gateways and onto any drawable lacking id
+ * keeps real task ids stay untouched
+ *
  */
 export function stampLogicalIds(root) {
     function walk(node) {

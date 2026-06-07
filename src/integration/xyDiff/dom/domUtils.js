@@ -1,5 +1,6 @@
-
-// return child element of a node like parameters, annotations, etc.
+/**
+ * returns element children of a node like parameters, annotations, etc.
+ */
 export function childElements(node) {
     const out = [];
     for (let i = 0; i < node.childNodes.length; i++) {
@@ -9,7 +10,12 @@ export function childElements(node) {
     return out;
 }
 
-// return first child element of a node
+/**
+ * return first element child of a node, useful for extracting payload nodes
+ *
+ * @param node
+ * @returns {*|null}
+ */
 export function firstElementChild(node) {
     for (let i = 0; i < node.childNodes.length; i++) {
         const c = node.childNodes[i];
@@ -18,7 +24,12 @@ export function firstElementChild(node) {
     return null;
 }
 
-// walk upwards until the nearest element node is found
+/**
+ * walk upwards until the nearest element node is found
+ * xydiff may point to non-element nodes (e.g. text nodes) but visualization needs an xml element
+ * @param node
+ * @returns {*|null}
+ */
 export function nearestElementNode(node) {
     let cur = node;
     while (cur) {
@@ -29,7 +40,13 @@ export function nearestElementNode(node) {
     return null;
 }
 
-// searches the tree under root und return the first element that matches the id
+/**
+ * searches the tree under root und return the first element that matches the id
+ *
+ * @param root
+ * @param id
+ * @returns {{getAttribute}|*|null}
+ */
 export function findFirstElementById(root, id) {
     if (!root) return null;
     const stack = [root];
@@ -46,7 +63,14 @@ export function findFirstElementById(root, id) {
     return null;
 }
 
-// collects all nodes under a branch or subtree
+/**
+ * collects all nodes under a branch or subtree
+ * used for branch deletes/inserts/moves because a whole deleted branch may contain many cpee nodes
+ *
+ * @param root
+ * @param limit
+ * @returns {*[]}
+ */
 export function collectDescendantIds(root, limit = 50) {
     const ids = [];
     if (!root) return ids;
@@ -65,7 +89,13 @@ export function collectDescendantIds(root, limit = 50) {
     return ids;
 }
 
-// collect all nodes of the document in postorder traversal (from leaves to parents)
+/**
+ * collect all nodes of the document in postorder traversal (from leaves to parents)
+ * important for mapping
+ *
+ * @param doc
+ * @returns {*[]}
+ */
 export function collectNodesPostorder(doc) {
     const out = [];
     const isWhitespaceText = (n) =>

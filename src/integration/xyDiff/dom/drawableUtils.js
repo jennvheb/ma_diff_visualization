@@ -1,26 +1,11 @@
 import {BRANCH_CONTAINER_TAGS, CONDITION_TAGS, DIFF_BOUNDARY_TAGS, STRUCTURAL_TAGS} from "../../tags.js";
 import {elementByRelIndexPath, indexPathForNodeRelative, trimRelPathToExistingElement} from "./pathUtils.js";
 import {childElements} from "./domUtils.js";
-import {isGatewayTagName} from "../../stableIds.js";
+import {isGatewayTagName, nearestDrawable} from "../../stableIds.js";
 
 // get the tagname (call, loop, etc)
 export function tagName(el) {
     return (el?.localName || el?.tagName || "").toLowerCase();
-}
-
-// walk upwards from a node to find the nearest ancestor that is drawable, used for when the edits are deeply nested as the node is colored not the nested info
-export function nearestDrawableAncestor(node) {
-    let cur = node;
-    while (cur) {
-        const el = cur;
-        if (!el || el.nodeType !== 1) break;
-
-        const tag = tagName(el);
-        if (DIFF_BOUNDARY_TAGS.has(tag)) return el;
-
-        cur = el.parentNode;
-    }
-    return null;
 }
 
 // walk upwards to find the nearest ancestor that is a branch container for when an edit has been done there
@@ -84,6 +69,14 @@ function tagAtRel(baseElem, relPath) {
     return tagName(el);
 }
 
+/**
+ * checks whether an element at the path is structural
+ * structural means internal process structure, not a user-level task
+ *
+ * @param baseElem
+ * @param relPath
+ * @returns {boolean}
+ */
 export function isStructuralRel(baseElem, relPath) {
     return STRUCTURAL_TAGS.has(tagAtRel(baseElem, relPath));
 }
@@ -107,7 +100,13 @@ export function payloadHasStructuralTags(payloadEl) {
     return false;
 }
 
-// if xydiff reports ONLY shifting edits then that is only internal to the xydiff because of structural changes not because an actual edit that happened; it should not be visualized
+/**
+ * if xydiff reports ONLY shifting edits then that is only internal to the xydiff because of structural changes not because an actual edit that happened; it should not be visualized
+ * filters out xydiff noise and prevents false updates
+ *
+ * @param payloadEl
+ * @returns {this is *[]|boolean}
+ */
 export function payloadIsShiftingOnly(payloadEl) {
     if (!payloadEl || payloadEl.nodeType !== 1) return false;
 
@@ -130,7 +129,12 @@ export function payloadIsShiftingOnly(payloadEl) {
     return false;
 }
 
-// shifting appears somwhere in the payload; used to distinguish actual edits again (important for move+update)
+/**
+ * shifting appears somwhere in the payload; used to distinguish actual edits again (important for move+update)
+ *
+ * @param payloadEl
+ * @returns {boolean}
+ */
 export function payloadContainsShifting(payloadEl) {
     if (!payloadEl) return false;
 
@@ -150,7 +154,14 @@ export function payloadContainsShifting(payloadEl) {
     return false;
 }
 
-// take a relative path (node starting from description root) and snap if to the nearest ancestor by trimming and resolving, climbing and computing drawable node's relative path
+/**
+ * take a low-level path (node starting from description root) and snap if to the nearest ancestor by trimming and resolving, climbing and computing drawable node's relative path
+ * tims the path to an existing element, finds the nearest drawable ancestor and returns that drawable path
+ *
+ * @param baseElem
+ * @param relPath
+ * @returns {*|string}
+ */
 export function snapRelPathToDrawable(baseElem, relPath) {
     if (!baseElem || !relPath) return relPath;
 
@@ -158,7 +169,7 @@ export function snapRelPathToDrawable(baseElem, relPath) {
     const target = elementByRelIndexPath(baseElem, trimmed);
     if (!target) return relPath;
 
-    const drawable = nearestDrawableAncestor(target);
+    const drawable = nearestDrawable(target);
     if (!drawable) return relPath;
 
     return indexPathForNodeRelative(baseElem, drawable) || relPath;
