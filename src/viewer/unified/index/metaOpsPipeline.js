@@ -109,38 +109,6 @@ function recoverStableIdMovesForCpeeDiff(metaOps, oldRoot, newRoot, isXy) {
     return [...metaOps, ...stableMoves];
 }
 
-/**
- * removes CpeeDiff move operations for synthetic gateways or branch containers
- * only applies to CpeeDiff, not XYDiff
- *
- * @param metaOps
- * @param isXy
- * @returns {*}
- */
-function dropCpeeDiffGatewayMoveNoise(metaOps, isXy) {
-    if (isXy) return metaOps;
-
-    return metaOps.filter(op => {
-        if (op.type !== "move" && op.type !== "moveupdate") return true;
-
-        const sid = String(op.sidOld || op.sidNew || "");
-        const tag = String(op.oldNodeTag || "");
-
-        const isSyntheticGatewayMove =
-            sid.startsWith("__gw_") ||
-            tag === "choose" ||
-            tag === "parallel_branch" ||
-            tag === "alternative" ||
-            tag === "otherwise";
-
-        if (isSyntheticGatewayMove) {
-            return false;
-        }
-
-        return true;
-    });
-}
-
 function isMoveLike(op) {
     return op?.type === "move" || op?.type === "moveupdate";
 }
@@ -267,8 +235,6 @@ export function buildMetaOps({ oldRoot, newRoot, diffOps, isXy }) {
     });
 
     metaOps = mergeMoveAndUpdateOps(metaOps);
-    //TODO
-    //metaOps = dropCpeeDiffGatewayMoveNoise(metaOps, isXy);
     metaOps = recoverStableIdMovesForCpeeDiff(metaOps, oldRoot, newRoot, isXy);
     metaOps = suppressNestedMoveOps(metaOps);
     if (!isXy) {
