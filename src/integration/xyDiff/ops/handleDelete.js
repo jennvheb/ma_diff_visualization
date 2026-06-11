@@ -1,7 +1,8 @@
 import {
     pushUpdateNode,
     resolveDeleteFromRename,
-    resolveOldPathByDeletePayload
+    resolveOldPathByDeletePayload,
+    textContentTrimmed
 } from "./opUtils.js";
 import {firstXmId, normalizeXmKey, resolveRelPathByXidForMove, xidElTag} from "../xid/resolveByXid.js";
 import {DIFF_BOUNDARY_TAGS, NON_STRUCTURAL_MOVE_TAGS} from "../../tags.js";
@@ -59,6 +60,25 @@ export function handleDelete(edit, ctx, state) {
     }
 
     const payloadEl = firstElementChild(edit);
+    if (!isMove && !payloadEl && textContentTrimmed(edit).length > 0) {
+        const ownerOldPath =
+            resolveDrawableOwnerRelPathByParPos(
+                oldXidIndex,
+                baseOld,
+                edit.getAttribute("par"),
+                edit.getAttribute("pos")
+            )
+            || snapRelPathToDrawable(
+                baseOld,
+                resolveOldPathForDeleteOrUpdate(edit, workDir, oldDom, baseOld, oldXidIndex) || "/?"
+            );
+
+        if (ownerOldPath && ownerOldPath !== "/?") {
+            pushUpdateNode(state.operations, baseOld, ownerOldPath, `<_text_deleted/>`);
+        }
+
+        return;
+    }
 
     if (payloadEl && payloadIsShiftingOnly(payloadEl)) {
         return;

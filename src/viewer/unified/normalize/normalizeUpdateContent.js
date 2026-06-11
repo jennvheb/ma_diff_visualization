@@ -36,43 +36,59 @@ export function attachUpdateContent(meta, ctx) {
  * @returns {*[]}
  */
 export function mergeMoveAndUpdateOps(metaOps) {
+    console.log("MERGE INPUT TYPES", metaOps.map(o => ({
+        type: o.type,
+        oldPath: o.oldPath,
+        newPath: o.newPath,
+        rebasedOldPath: o.rebasedOldPath,
+        rebasedNewPath: o.rebasedNewPath,
+        sidOld: o.sidOld,
+        sidNew: o.sidNew
+    })));
     const consumed = new Set();
     const out = [];
 
+    function pathList(op) {
+        return [
+            op.oldPath,
+            op.newPath,
+            op.rebasedOldPath,
+            op.rebasedNewPath,
+            op.mergeOwnerPath
+        ].filter(Boolean);
+    }
+
     function sameLogicalNode(a, b) {
         if (!a || !b) return false;
+
+        const aPaths = pathList(a);
+        const bPaths = pathList(b);
+
+        // CpeeDiff may attach the update to the moved node's new/dynamic path.
+        // So if any path overlaps, treat it as same logical operation candidate.
+        if (aPaths.some(p => bPaths.includes(p))) {
+            return true;
+        }
 
         const aOld = a.sidOld || a.selfOldId || null;
         const bOld = b.sidOld || b.selfOldId || null;
         const aNew = a.sidNew || null;
         const bNew = b.sidNew || null;
 
-        // If both operations know old and new ids, both sides must agree.
         if (aOld && bOld && aNew && bNew) {
             return aOld === bOld && aNew === bNew;
         }
 
-        // If both know old ids, old ids must agree.
-        // But do not allow one operation's new id to contradict the other's old id.
         if (aOld && bOld && aOld === bOld) {
             if (aNew && aNew !== aOld) return false;
             if (bNew && bNew !== bOld) return false;
             return true;
         }
 
-        // If both know new ids, new ids must agree.
-        // But do not allow one operation's old id to contradict the other's new id.
         if (aNew && bNew && aNew === bNew) {
             if (aOld && aOld !== aNew) return false;
             if (bOld && bOld !== bNew) return false;
             return true;
-        }
-
-        // Path fallback only if no ids are available.
-        if (!aOld && !aNew && !bOld && !bNew) {
-            return !!a.mergeOwnerPath &&
-                !!b.mergeOwnerPath &&
-                a.mergeOwnerPath === b.mergeOwnerPath;
         }
 
         return false;
@@ -92,6 +108,23 @@ export function mergeMoveAndUpdateOps(metaOps) {
 
             const other = metaOps[j];
             if (other.type !== "update") continue;
+            console.log("MOVEUPDATE CANDIDATE", {
+                moveOld: op.oldPath,
+                moveNew: op.newPath,
+                moveRebasedOld: op.rebasedOldPath,
+                moveRebasedNew: op.rebasedNewPath,
+                moveSidOld: op.sidOld,
+                moveSidNew: op.sidNew,
+
+                updOld: other.oldPath,
+                updNew: other.newPath,
+                updRebasedOld: other.rebasedOldPath,
+                updRebasedNew: other.rebasedNewPath,
+                updSidOld: other.sidOld,
+                updSidNew: other.sidNew,
+
+                same: sameLogicalNode(op, other)
+            });
             if (!sameLogicalNode(op, other)) continue;
 
             const mergedSidOld = merged.sidOld || other.sidOld || null;

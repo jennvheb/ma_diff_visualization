@@ -84,7 +84,10 @@ export function normalizeOp(op, idx, ops, ctx) {
         oldNodeDynamic = nodeAtPath(oldWork, op.oldPath);
     }
 
-    const oldNode = oldNodeStatic;
+    const oldNode =
+        !isXy && op.type === "update" && oldNodeDynamic
+            ? oldNodeDynamic
+            : oldNodeStatic;
     let type = op.type;
 
     let ownerOld = oldNode ? nearestDrawable(oldNode) : null;
@@ -106,7 +109,7 @@ export function normalizeOp(op, idx, ops, ctx) {
             if (p) rebasedNewPath = p;
         }
     }
-    if (!isXy && type === "update" && !ownerOld && ownerOldDynamic) {
+    if (!isXy && type === "update" && ownerOldDynamic) {
         const dynId = ownerOldDynamic.getAttribute?.("id") || null;
 
         if (dynId && !String(dynId).startsWith("__gw_")) {

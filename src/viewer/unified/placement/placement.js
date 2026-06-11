@@ -1,23 +1,27 @@
 import {isGatewayTagName, nearestDrawable, tagName} from "../../../integration/stableIds.js";
 import {bestMatchGatewayInNew, isSyntheticGw, prefixDrawableIdsInSubtree} from "../ids.js";
 import {
+    findById,
     findNearestExistingAncestorInUnified,
     insertIntoContainerAtOldIndex,
-    insertIntoContainerAtReservedOldIndex, findById, tryPlaceInsideDeletedParentGhost
+    insertIntoContainerAtReservedOldIndex,
+    tryPlaceInsideDeletedParentGhost
 } from "../xml.js";
-import {parentPath} from "../config.js";
-import {lastSeg} from "../config.js";
+import {lastSeg, parentPath} from "../config.js";
 import {childElements} from "../undo/xmlPatchUtils.js";
 import {
     adjustedTopLevelXySlot,
-    findOldSourceParentContainerForGhost, replacementInsertForOldPath
+    findOldSourceParentContainerForGhost,
+    replacementInsertForOldPath
 } from "./placementHelpers.js";
 import {
     placeMoveGhostAtOldSourceSlot,
-    tryPlaceByOldNeighborsPreferMoveGhost, tryPlaceBySameId,
+    tryPlaceByOldNeighborsPreferMoveGhost,
+    tryPlaceBySameId,
     tryPlaceDeletedBranchInsideSurvivingGateway,
-    tryPlaceReplacementDeleteGhost
+    tryPlaceReplacementDeleteGhost,
 } from "./tryPlace.js";
+
 
 /**
  * main function, inserts ghosts
@@ -82,6 +86,30 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
             );
 
             if (okParentGhost) return;
+        }
+        if (ghostKind === "delete") {
+            const oldPath = op.rebasedOldPath || op.oldPath;
+
+            if (parentPath(oldPath) === "/") {
+                let idx = lastSeg(oldPath);
+                idx = Math.max(0, idx - 1);
+
+                const kids = Array.from(unifiedRoot.children || [])
+                    .filter(el => {
+                        const t = tagName(el);
+                        return t === "call" ||
+                            t === "manipulate" ||
+                            t === "loop" ||
+                            t === "choose" ||
+                            t === "parallel" ||
+                            t === "stop";
+                    });
+
+                if (kids[idx]) unifiedRoot.insertBefore(ghost, kids[idx]);
+                else unifiedRoot.appendChild(ghost);
+
+                return;
+            }
         }
 
         // For XY moves, oldPath is static and should define the source slot.
@@ -180,6 +208,31 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
 
         if (okReplacement) return;
 
+        const deleteOldPath = op.rebasedOldPath || op.oldPath;
+        const isTopLevelDelete = parentPath(deleteOldPath) === "/";
+
+        if (isTopLevelDelete) {
+            let idx = lastSeg(deleteOldPath);
+            idx = Math.max(0, idx - 1);
+
+            const kids = Array.from(unifiedRoot.children || [])
+                .filter(el => {
+                    const t = tagName(el);
+                    return t === "call" ||
+                        t === "manipulate" ||
+                        t === "loop" ||
+                        t === "choose" ||
+                        t === "parallel" ||
+                        t === "stop";
+                });
+
+            if (kids[idx]) unifiedRoot.insertBefore(ghost, kids[idx]);
+            else unifiedRoot.appendChild(ghost);
+
+            return;
+        }
+
+
         const okNei = tryPlaceByOldNeighborsPreferMoveGhost(
             op,
             unifiedRoot,
@@ -210,7 +263,8 @@ export function insertGhost(op, unifiedRoot, ctx, options = {}) {
         );
 
         if (container) {
-            return;
+            const ok = insertIntoContainerAtReservedOldIndex(container, ghost, ownerOld);
+            if (ok) return;
         }
         return;
     }

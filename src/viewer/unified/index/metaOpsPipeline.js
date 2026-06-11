@@ -229,12 +229,15 @@ export function buildMetaOps({ oldRoot, newRoot, diffOps, isXy }) {
             contentDiff,
             changeOccured,
         };
-    }).filter(op => {
+    });
+
+    metaOps = mergeMoveAndUpdateOps(metaOps);
+
+    metaOps = metaOps.filter(op => {
         if (op.type === "update") return !!op.changeOccured;
         return true;
     });
 
-    metaOps = mergeMoveAndUpdateOps(metaOps);
     metaOps = recoverStableIdMovesForCpeeDiff(metaOps, oldRoot, newRoot, isXy);
     metaOps = suppressNestedMoveOps(metaOps);
     if (!isXy) {
