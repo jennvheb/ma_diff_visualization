@@ -54,17 +54,6 @@ export class EndpointAnchorMatcher {
             return buckets;
         };
 
-        const groupByLabel = (nodes) => {
-            const map = new Map();
-            for (const n of nodes) {
-                const raw = readTaskLabel(n);
-                if (!raw) continue;
-                if (!map.has(raw)) map.set(raw, []);
-                map.get(raw).push(n);
-            }
-            return map;
-        };
-
         const groupById = (nodes) => {
             const map = new Map(); // id -> nodes[]
             for (const n of nodes) {
@@ -106,27 +95,6 @@ export class EndpointAnchorMatcher {
                         matching.matchNew(n, o);
                     }
                 }
-            }
-
-            // Step 3: remaining ambiguous tag+endpoint bucket -> try label
-            const oldRemaining = olds.filter(o => !matching.isMatched(o));
-            const newRemaining = news.filter(n => !matching.isMatched(n));
-
-            const oldByLabel = groupByLabel(oldRemaining);
-            const newByLabel = groupByLabel(newRemaining);
-
-            for (const [labelKey, Olabel] of oldByLabel.entries()) {
-                const Nlabel = newByLabel.get(labelKey);
-                if (!Nlabel || !Olabel.length || !Nlabel.length) continue;
-
-                if (Olabel.length === 1 && Nlabel.length === 1) {
-                    const o = Olabel[0], n = Nlabel[0];
-                    if (!matching.isMatched(o) && !matching.isMatched(n)) {
-                        matching.matchNew(n, o);
-                    }
-                }
-
-                // any remaining ambiguous nodes fall through
             }
 
             // any remaining ambiguous olds/news for this endpoint bucket fall through

@@ -22,19 +22,6 @@ export class LabelAnchorMatcher {
             return map;
         };
 
-        const groupByEndpoint = (nodes) => {
-            const map = new Map(); // endpoint -> nodes[]
-            for (const v of nodes) {
-                const epRaw = getAttr(v, 'endpoint');
-                const ep = epRaw ? String(epRaw).trim() : '';
-                if (!ep) continue; // no endpoint -> fall through, do not resolve here
-
-                if (!map.has(ep)) map.set(ep, []);
-                map.get(ep).push(v);
-            }
-            return map;
-        };
-
         const groupById = (nodes) => {
             const map = new Map(); // id -> nodes[]
             for (const v of nodes) {
@@ -63,7 +50,7 @@ export class LabelAnchorMatcher {
                 continue;
             }
 
-            // ambiguous tag+label bucket: try id FIRST
+            // ambiguous tag+label bucket: try id
             const Oid = groupById(olds);
             const Nid = groupById(news);
 
@@ -77,26 +64,6 @@ export class LabelAnchorMatcher {
                         matching.matchNew(n, o);
                     }
                 }
-            }
-
-            // then endpoint for remaining unmatched nodes
-            const oldRemaining = olds.filter(o => !matching.isMatched(o));
-            const newRemaining = news.filter(n => !matching.isMatched(n));
-
-            const Oep = groupByEndpoint(oldRemaining);
-            const Nep = groupByEndpoint(newRemaining);
-
-            for (const [ep, oNodes] of Oep.entries()) {
-                const nNodes = Nep.get(ep);
-                if (!nNodes || !oNodes.length || !nNodes.length) continue;
-
-                if (oNodes.length === 1 && nNodes.length === 1) {
-                    const o = oNodes[0], n = nNodes[0];
-                    if (!matching.isMatched(o) && !matching.isMatched(n)) {
-                        matching.matchNew(n, o);
-                    }
-                }
-                // remaining ambiguous nodes in this endpoint bucket fall through
             }
             // remaining ambiguous nodes in this label bucket fall through
         }

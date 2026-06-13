@@ -1,4 +1,5 @@
 import {DiffConfig} from '../../../../cpeediff/src/config/DiffConfig.js';
+import {allowFallbackMatch} from "./anchorGuard.js";
 
 const getId = (node) =>
     node?.attributes?.get?.('id') ?? null;
@@ -8,7 +9,15 @@ const getId = (node) =>
  */
 export class IdAnchorMatcher {
     match(oldRoot, newRoot, matching) {
-        if (!DiffConfig.MATCH_ANCHORS?.includes?.('id')) return;
+        const anchors = DiffConfig.MATCH_ANCHORS || [];
+        const singleAnchor = anchors.length === 1 ? anchors[0] : null;
+
+        if (
+            !anchors.includes("id") &&
+            !(singleAnchor === "endpoint" || singleAnchor === "label")
+        ) {
+            return;
+        }
 
         // build lookup table for new model by extracting ids from the new model
         const newById = new Map();
@@ -26,6 +35,9 @@ export class IdAnchorMatcher {
             if (!vnew) continue;
             // if the node is already matched continue
             if (matching.isMatched(vold) || matching.isMatched(vnew)) continue;
+
+            if (!allowFallbackMatch(vold, vnew)) continue;
+
             // otherwise there is a new matching
             matching.matchNew(vnew, vold);
         }
