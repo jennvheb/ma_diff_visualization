@@ -19,6 +19,37 @@ const BRANCH_CONTAINER_TAGS = new Set([
 ]);
 
 /**
+ * finds the gateway anchor even if said gateway was modified too
+ * by trying to map old gateway to new/unified gateway
+ * and places ghost relative to that mapped gateway
+ * @param oldGateway
+ * @param unifiedRoot
+ * @param ctx
+ * @returns {*|null}
+ */
+function findGatewayAnchorInUnified(oldGateway, unifiedRoot, ctx) {
+    if (!oldGateway || !isGatewayTagName(tagName(oldGateway))) return null;
+
+    const oldId = oldGateway.getAttribute?.("id") || null;
+
+    if (oldId) {
+        const direct = findById(unifiedRoot, oldId);
+        if (direct) return direct;
+    }
+
+    const parentDrawable = nearestDrawable(oldGateway.parentNode);
+    const parentId = parentDrawable?.getAttribute?.("id") || "root";
+
+    const bestId = bestMatchGatewayInNew(
+        oldGateway,
+        parentId,
+        ctx.newGatewayIndex || []
+    );
+
+    return bestId ? findById(unifiedRoot, bestId) : null;
+}
+
+/**
  * places a move ghost at the old source position
  * finds the old parent container in the unified model,
  * computes desired index from old path, inserts ghost there,
@@ -43,6 +74,13 @@ export function placeMoveGhostAtOldSourceSlot(op, unifiedRoot, ctx, ghost) {
 
     if (!container) return false;
 
+    /* for CpeeDiff move ghosts, do not place into root just
+    because the OLD parent path is top-level;
+    it's too unstable after deletes/gateway updates*/
+    if (!ctx.isXy && container === unifiedRoot) {
+        return false;
+    }
+
     const desiredIdx =
         parentPath(oldPath) === "/"
             ? adjustedTopLevelXySlot(ctx.oldRoot, oldPath)
@@ -53,7 +91,7 @@ export function placeMoveGhostAtOldSourceSlot(op, unifiedRoot, ctx, ghost) {
     if (kids[desiredIdx]) {
         container.insertBefore(ghost, kids[desiredIdx]);
     } else {
-        container.appendChild(ghost);
+        return false;
     }
 
     op.realizeParentPath = indexPathForNodeRelative(unifiedRoot, container);
@@ -86,13 +124,37 @@ export function tryPlaceByOldNeighborsPreferMoveGhost(
     oldRoot,
     ghostKind,
     ctx
-) {    const parent = ownerOld?.parentNode;
+) {
+    const parent = ownerOld?.parentNode;
+
     if (!parent) return false;
 
     const siblings = drawableChildrenOnly(parent);
     const myIdx = siblings.indexOf(ownerOld);
 
     if (myIdx < 0) return false;
+
+    if (ghostKind === "move" || ghostKind === "delete") {
+        const prev = siblings[myIdx - 1] || null;
+        const next = siblings[myIdx + 1] || null;
+
+        const prevGw = findGatewayAnchorInUnified(prev, unifiedRoot, ctx);
+        if (prevGw) {
+            const p = prevGw.parentNode || unifiedRoot;
+            if (prevGw.nextSibling) p.insertBefore(ghost, prevGw.nextSibling);
+            else p.appendChild(ghost);
+            stampRealizePlacement(op, unifiedRoot, p, ghost);
+            return true;
+        }
+
+        const nextGw = findGatewayAnchorInUnified(next, unifiedRoot, ctx);
+        if (nextGw) {
+            const p = nextGw.parentNode || unifiedRoot;
+            p.insertBefore(ghost, nextGw);
+            stampRealizePlacement(op, unifiedRoot, p, ghost);
+            return true;
+        }
+    }
 
     // Prefer previous stable/placed sibling -> insert after it
     let found = findVisibleOldSiblingAnchor(

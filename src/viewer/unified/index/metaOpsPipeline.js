@@ -247,10 +247,12 @@ export function buildMetaOps({ oldRoot, newRoot, diffOps, isXy }) {
             const oldP = op.rebasedOldPath || op.oldPath;
             const newP = op.rebasedNewPath || op.newPath;
 
-            // only index changed inside same parent = shift, not visual move
-            if (oldP && newP && parentPath(oldP) === parentPath(newP)) {
-                return false;
-            }
+            const sameParent = oldP && newP && parentPath(oldP) === parentPath(newP);
+
+            if (!sameParent) return true;
+
+            // only suppress synthetic child moves that happen during gateway moves
+            if (op.recoveredFromStableId) return false;
 
             return true;
         });
